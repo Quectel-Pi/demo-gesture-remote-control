@@ -1,6 +1,6 @@
-# Gesture-Controlled
+# Gesture Remote Control
 
-[中文](README.md) | English
+[中文](README_zh.md) | English
 
 This project is a gesture-recognition–based remote video control demo implemented on the [Quectel Pi H1 single-board computer](https://developer.quectel.com/doc/sbc/en/index.html).
 The system captures hand images through a camera and applies AI-based hand gesture recognition algorithms to enable touchless control of video playback, progress, and volume, providing a natural and intuitive user interaction experience.
@@ -27,7 +27,7 @@ The system captures hand images through a camera and applies AI-based hand gestu
 |----------|---------|
 |Open palm (5 fingers)|Play / Pause|
 |Swipe right|Fast forward 5 seconds|
-|Swipe leftRewind 5 seconds|
+|Swipe left|Rewind 5 seconds|
 |Swipe up|Volume +5%|
 |Swipe down|Volume −5%|
 
@@ -53,15 +53,33 @@ The system captures hand images through a camera and applies AI-based hand gestu
    - PySide6 == 6.5.3
    - protobuf == 3.20.3
 
-```shell
-# Update package sources and install ffmpeg
-sudo apt update && sudo apt install -y ffmpeg
-# Upgrade pip
-pip install --upgrade pip
-# Install Python dependencies
-pip install -r requirements.txt
-# Run the application
-python3 main.py
+1. Create the `gesture-remote-control` folder on the board's terminal to store the project code.
+
+```bash
+mkdir gesture-remote-control
+cd gesture-remote-control
+```
+
+2. Clone the project using git.
+
+```bash
+sudo apt update
+# Install git
+sudo apt install -y git
+# Clone the project
+git clone https://github.com/Quectel-Pi/demo-gesture-remote-control.git
+```
+
+3. Run the following commands in sequence on the board's terminal.
+
+```bash
+cd demo-gesture-remote-control
+# Set script permissions
+sudo chmod 755 install.sh
+# Execute the script
+./install.sh  # "Deployment complete" in the terminal indicates successful deployment
+# Reopen the terminal and verify the Python version
+python3 --version  # Output "Python 3.10.15" indicates successful installation
 ```
 
 ## Project Structure
@@ -79,17 +97,18 @@ gesture-remote-control/
 │   ├── fullscreen_player_mode.py # Fullscreen playback UI
 │   ├── log.py                  # Logging module
 ├── log_files/                  # Log files
-├── README.md                   # Project chinese documentation
-├── README_en.md                # Project english documentation
+├── README.md                   # Project english documentation
+├── README_zh.md                # Project chinese documentation
+├── install.sh                  # Environment deployment script
 └── requirements.txt            # Dependency list
 ```
 
 ## Running the Application
 
-```shell
-# Enter the source code directory
-cd src
-# run
+Run `main.py` from the `src` directory.
+
+```bash
+cd gesture-remote-control/demo-gesture-remote-control/src/
 python3 main.py
 ```
 ![](docs/assets/main.png)
