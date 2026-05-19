@@ -1,6 +1,6 @@
 # 手势遥控器
 
-[English](README_en.md) | 中文
+[English](README.md) | 中文
 
 本项目是一个基于 [Quectel Pi H1 单板电脑](https://developer.quectel.com/doc/sbc/)实现的手势识别远程视频控制示例。
 系统通过摄像头采集手部图像，结合 AI 手势识别算法，实现隔空控制视频播放、进度与音量的自然交互体验。
@@ -53,13 +53,33 @@
    - PySide6 == 6.5.3
    - protobuf == 3.20.3
 
-```shell
-# 更新镜像源及安装ffmpeg
-sudo apt update && sudo apt install -y ffmpeg
-# 更新pip
-pip install --upgrade pip
-# 安装python包
-pip install -r requirements.txt
+1.在智能主控板终端下新建gesture-remote-control文件夹存放项目代码。
+
+```bash
+mkdir gesture-remote-control
+cd gesture-remote-control
+```
+
+2.使用git命令克隆项目代码。
+
+```bash
+sudo apt update
+#安装gitc
+sudo apt install -y git
+#克隆项目代码
+git clone https://github.com/Quectel-Pi/demo-gesture-remote-control.git
+```
+
+3.在智能主控板的终端下依次执行下面命令。
+
+```bash
+cd demo-gesture-remote-control
+#设置脚本权限
+sudo chmod 755 install.sh
+#执行脚本
+./install.sh #终端显示"Deployment complete"则说明部署完成
+#重新打开终端,验证python版本
+python3 --version #输出“Python 3.10.15”则表示安装成功
 ```
 
 ## 项目结构
@@ -79,16 +99,18 @@ gesture-remote-control/
 ├── log_files/                  # 日志文件
 ├── README.md                   # 项目中文说明文档
 ├── README_en.md                # 项目英文说明文档
+├── install.sh                          # 部署环境脚本
 └── requirements.txt            # 依赖包列表
 ```
 
 ## 运行程序
 
-```shell
-# 进入源码目录
-cd src
-# 运行程序
+在src路径下执行`main.py`程序启动脚本。
+
+```bash
+cd gesture-remote-control/demo-gesture-remote-control/src/
 python3 main.py
+
 ```
 ![界面预览](docs/assets/main.png)
 
