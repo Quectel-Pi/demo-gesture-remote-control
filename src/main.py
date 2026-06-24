@@ -3,7 +3,6 @@ import cv2
 import os
 import time
 from datetime import datetime
-import threading
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -599,21 +598,12 @@ class MainWindow(QMainWindow):
                 new_pos = max(0.0, min(self.video_duration, cur_pos + delta))
                 target_frame = int((new_pos / self.video_duration) * self.video_player_thread.total_frames) \
                                 if self.video_duration > 0 else self.video_player_thread.current_frame
-
-                def _do_seek(frame_idx, pos_sec):
-                    try:
-                        # optional: small sleep to batch rapid seeks (debounce)
-                        # time.sleep(0.05)
-                        self.video_player_thread.seek(frame_idx)
-                        try:
-                            from PySide6.QtCore import QTimer
-                            QTimer.singleShot(0, lambda: self.statusBar().showMessage(f"Seek to {int(pos_sec)}s"))
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        error(f"seek error (async): {e}")
-
-                threading.Thread(target=_do_seek, args=(target_frame, new_pos), daemon=True).start()
+                self.video_player_thread.seek(target_frame)
+                # 立即刷新暂停态下的 UI 反馈（进度条与时间）
+                position = self.video_player_thread.get_position()
+                self.progress_slider.setValue(int(position * 1000))
+                self.update_time_label(position * self.video_duration, self.video_duration)
+                self.statusBar().showMessage(f"Seek to {int(new_pos)}s")
             except Exception as e:
                 error(f"seek error (prep): {e}")
             return

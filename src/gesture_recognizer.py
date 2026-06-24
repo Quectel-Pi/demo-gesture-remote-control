@@ -40,6 +40,7 @@ class MediaPipeGestureRecognizer:
         # 参数
         self.flow_thresh_ratio = 0.040
         self.flow_static_ratio = 0.010
+        self.flow_static_ratio_open_palm = 0.014
         self.swipe_consistent_min = 4
 
         self.ema_alpha = 0.25
@@ -68,12 +69,15 @@ class MediaPipeGestureRecognizer:
         # 张开手掌
         self.open_palm_min_spread_ratio = 1.22
         self.open_palm_max_spread_ratio = 2.01
-        self.open_palm_ms = 220
-        self.open_palm_cooldown_ms = 300
-        self._open_palm_stable_cnt = 0
+        self.open_palm_ms = 180
+        self.open_palm_cooldown_ms = 200
+        self._open_palm_start_ms = 0
+        self._open_palm_release_cnt = 0
         self._last_motion_cmd_ms = 0
         self._last_spread = 0.0
         self.open_palm_armed = True
+        self.open_palm_latched = False
+        self.open_palm_release_frames = 3
 
         # 轨迹 & 主手选择
         self.tracks = {}
@@ -266,7 +270,7 @@ class MediaPipeGestureRecognizer:
     # ----------------------------- Core infer (基于 demo 的判断) -----------------------------
     def _infer(self, pts, w, h, gray):
         scale = max(w, h)
-        flow_static_px = max(6, int(scale * self.flow_static_ratio))
+        flow_static_px = max(8, int(scale * self.flow_static_ratio_open_palm))
 
         # 四指张开（不含拇指）
         four = 0
@@ -352,18 +356,26 @@ class MediaPipeGestureRecognizer:
         is_static = (abs(dx_med) < flow_static_px) and (abs(dy_med) < flow_static_px)
         spread = self._palm_spread(pts, cx, cy)
         spread_ok = (four >= 4) and (self.open_palm_min_spread_ratio <= spread <= self.open_palm_max_spread_ratio)
-        if (not cooling) and is_static and spread_ok and self.open_palm_armed:
-            self._open_palm_stable_cnt += 1
-            # 使用近似 33ms 帧时间判断（与 demo 保持）
-            if (self._open_palm_stable_cnt * 33) >= self.open_palm_ms:
-                self._open_palm_stable_cnt = 0
-                # 触发后取消 armed（需要手离开再回来才可再次触发）
-                self.open_palm_armed = False
-                gesture = "open_palm"
-                cmd = "toggle"
-                return gesture, cmd
+        open_candidate = (not cooling) and is_static and spread_ok
+
+        if not open_candidate:
+            self._open_palm_start_ms = 0
+            self._open_palm_release_cnt = min(self.open_palm_release_frames, self._open_palm_release_cnt + 1)
+            if self._open_palm_release_cnt >= self.open_palm_release_frames:
+                self.open_palm_latched = False
+                self.open_palm_armed = True
         else:
-            self._open_palm_stable_cnt = 0
+            self._open_palm_release_cnt = 0
+            if self.open_palm_armed and not self.open_palm_latched:
+                if self._open_palm_start_ms == 0:
+                    self._open_palm_start_ms = now_ms
+                elif (now_ms - self._open_palm_start_ms) >= self.open_palm_ms:
+                    self._open_palm_start_ms = 0
+                    self.open_palm_latched = True
+                    self.open_palm_armed = False
+                    gesture = "open_palm"
+                    cmd = "toggle"
+                    return gesture, cmd
 
         return None, None
 
@@ -427,8 +439,11 @@ class MediaPipeGestureRecognizer:
             if gesture == "open_palm" and tid in self.tracks:
                 self.tracks[tid]["armed"] = False
         else:
-            # 没有主手时，取消 open_palm_armed
-            self.open_palm_armed = False
+            # 没有主手时重置状态，回到画面后可快速触发
+            self.open_palm_armed = True
+            self.open_palm_latched = False
+            self._open_palm_start_ms = 0
+            self._open_palm_release_cnt = self.open_palm_release_frames
 
         detection_result = {
             'hand_present': self.num_hands > 0,

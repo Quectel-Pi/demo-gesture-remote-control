@@ -53,33 +53,65 @@
    - PySide6 == 6.5.3
    - protobuf == 3.20.3
 
-1.在智能主控板终端下新建gesture-remote-control文件夹存放项目代码。
+### 实现步骤
 
-```bash
-mkdir gesture-remote-control
-cd gesture-remote-control
-```
-
-2.使用git命令克隆项目代码。
+1.在智能主控板上打开终端，使用 git 克隆项目代码。
 
 ```bash
 sudo apt update
-#安装gitc
 sudo apt install -y git
-#克隆项目代码
 git clone https://github.com/Quectel-Pi/demo-gesture-remote-control.git
 ```
 
-3.在智能主控板的终端下依次执行下面命令。
+执行完成后，当前目录下应生成`demo-gesture-remote-control`文件夹。
+
+2.在智能主控板的终端下依次执行下面命令，终端显示`Deployment complete`则说明部署完成。
 
 ```bash
 cd demo-gesture-remote-control
-#设置脚本权限
 sudo chmod 755 install.sh
-#执行脚本
-./install.sh #终端显示"Deployment complete"则说明部署完成
-#重新打开终端,验证python版本
-python3 --version #输出“Python 3.10.15”则表示安装成功
+./install.sh
+```
+
+如果执行`./install.sh`过程中报错，或终端未显示"Deployment complete"，请先不要继续执行后续步骤。建议先确认网络连接正常，再返回项目根目录重新执行一次`install.sh`。
+
+3.重新打开终端，验证 Python 版本，输出`Python 3.10.15`则表示安装成功。
+
+```bash
+python3 --version
+```
+
+#### 运行程序
+
+在`src`路径下执行`main.py`启动脚本；若程序正常启动，会打开摄像头画面窗口。
+
+```bash
+cd demo-gesture-remote-control/src/
+python3 main.py
+```
+
+![界面预览](docs/assets/main.png)
+
+### 配置开机自启动（可选）
+
+项目提供 `setup_autostart.sh`，用于配置用户级 systemd 自启动服务。
+
+```bash
+cd gesture-remote-control/demo-gesture-remote-control/
+./setup_autostart.sh install
+```
+
+服务管理命令：
+
+```bash
+./setup_autostart.sh status
+./setup_autostart.sh uninstall
+```
+
+查看日志：
+
+```bash
+journalctl --user -u gesture-remote-control -f
 ```
 
 ## 项目结构
@@ -100,6 +132,7 @@ gesture-remote-control/
 ├── README.md                   # 项目中文说明文档
 ├── README_en.md                # 项目英文说明文档
 ├── install.sh                          # 部署环境脚本
+├── setup_autostart.sh          # 开机自启动脚本
 └── requirements.txt            # 依赖包列表
 ```
 
@@ -115,4 +148,5 @@ python3 main.py
 ![界面预览](docs/assets/main.png)
 
 ## 报告问题
+如在使用过程中遇到问题，欢迎在[移远官方论坛](https://forumschinese.quectel.com/c/quectel-pi/58) 提交技术咨询，我们的技术支持团队将及时为您解答。
 欢迎提交Issue和Pull Request来改进此项目。
