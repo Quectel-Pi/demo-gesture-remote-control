@@ -15,70 +15,6 @@ MAIN_SCRIPT="$APP_DIR/src/main.py"
 REQUIREMENTS="$APP_DIR/requirements.txt"
 
 # ==================== 函数 ====================
-check_environment() {
-    local errors=0
-
-    echo "==> 检查环境..."
-
-    if [ ! -x "$PYTHON_BIN" ] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-        echo "  [ERROR] Python3 未找到: $PYTHON_BIN"
-        echo "          请先安装: sudo apt install python3 python3-pip"
-        ((errors++))
-    else
-        echo "  [OK] Python: $($PYTHON_BIN --version 2>&1)"
-    fi
-
-    if [ ! -f "$MAIN_SCRIPT" ]; then
-        echo "  [ERROR] 主程序未找到: $MAIN_SCRIPT"
-        ((errors++))
-    else
-        echo "  [OK] 主程序: $MAIN_SCRIPT"
-    fi
-
-    if ! command -v systemctl >/dev/null 2>&1; then
-        echo "  [ERROR] systemctl 不可用，需要 systemd"
-        ((errors++))
-    else
-        echo "  [OK] systemd 可用"
-    fi
-
-    return $errors
-}
-
-# 检查并安装 Python 依赖 (不使用虚拟环境)
-install_dependencies() {
-    echo "==> 检查 Python 依赖..."
-
-    if [ ! -f "$REQUIREMENTS" ]; then
-        echo "  [WARN] requirements.txt 未找到，跳过依赖检查"
-        return 0
-    fi
-
-    # 逐行检查每个包是否已安装
-    local missing=false
-    while IFS= read -r line; do
-        # 跳过空行和注释
-        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-        # 提取包名 (去掉版本号)
-        local pkg_name="${line%%[=<>~!]*}"
-        pkg_name="${pkg_name// /}"  # 去空格
-        if ! $PYTHON_BIN -c "import ${pkg_name//-/_}" 2>/dev/null; then
-            missing=true
-            break
-        fi
-    done < "$REQUIREMENTS"
-
-    if $missing; then
-        echo "  ==> 安装缺失的依赖..."
-        $PYTHON_BIN -m pip install -r "$REQUIREMENTS" --break-system-packages 2>/dev/null \
-            || $PYTHON_BIN -m pip install -r "$REQUIREMENTS" --user \
-            || { echo "  [ERROR] 依赖安装失败，请手动执行: pip3 install -r $REQUIREMENTS"; return 1; }
-        echo "  [OK] 依赖安装完成"
-    else
-        echo "  [OK] 所有依赖已就绪"
-    fi
-}
-
 generate_service() {
     echo "==> 生成服务文件..."
     mkdir -p "$SERVICE_DIR"
@@ -187,8 +123,6 @@ ACTION="${1:-install}"
 
 case "$ACTION" in
     install)
-        check_environment
-        install_dependencies
         generate_service
         install_service
         start_service
