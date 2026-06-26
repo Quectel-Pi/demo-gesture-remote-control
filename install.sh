@@ -3,7 +3,6 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 PY_VER=3.10.15
-VENV_PATH="$HOME/mediapipe_env"
 DEPS=(make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev
       libsqlite3-dev curl llvm libncursesw5-dev xz-utils tk-dev libxml2-dev
       libxmlsec1-dev libffi-dev liblzma-dev libncurses-dev git ffmpeg)
@@ -51,9 +50,9 @@ pyenv global "$PY_VER"
 echo "Python version: $(python --version 2>&1 || python3 --version)"
 
 echo "[3/3] Installing project dependencies..."
-pip install --upgrade pip
+python -m pip install --upgrade pip
 if [ -f "$APP_DIR/requirements.txt" ]; then
-  pip install -r "$APP_DIR/requirements.txt"
+  python -m pip install -r "$APP_DIR/requirements.txt"
 else
   echo "requirements.txt not found in $APP_DIR, skipping dependency installation."
 fi

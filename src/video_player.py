@@ -34,6 +34,13 @@ class VideoPlayerThread(QThread):
         self.audio_process = None
         self.audio_process_start_time = 0
         self._pause_position = 0
+        self._audio_restart_inflight = False
+        self._audio_restart_lock = threading.Lock()
+        self._last_audio_restart_time = 0.0
+        self._audio_restart_min_interval = 0.35
+        self._audio_resync_delay = 0.05
+        self._seek_audio_target_time = None
+        self._seek_audio_requested_at = 0.0
         
 
     def load_video(self, file_path):
@@ -269,10 +276,70 @@ class VideoPlayerThread(QThread):
             except Exception as e:
                 error(f"Error resuming audio: {e}")
 
+    def _start_audio_async(self, start_time=0):
+        """Start/restart audio in background to avoid blocking video frame loop."""
+        with self._audio_restart_lock:
+            if self._audio_restart_inflight:
+                return
+            self._audio_restart_inflight = True
+
+        def _worker(target_time):
+            try:
+                self._start_audio(target_time)
+            except Exception as e:
+                error(f"Async audio start failed: {e}")
+            finally:
+                with self._audio_restart_lock:
+                    self._audio_restart_inflight = False
+                    self._last_audio_restart_time = time.time()
+
+        threading.Thread(target=_worker, args=(start_time,), daemon=True).start()
+
+    def _request_audio_resync(self, seek_time):
+        """Coalesce frequent seek operations into one delayed audio resync request."""
+        with self._lock:
+            self._seek_audio_target_time = seek_time
+            self._seek_audio_requested_at = time.time()
+
+    def _maybe_process_audio_resync(self):
+        """Apply pending seek audio resync when command burst settles."""
+        with self._lock:
+            target_time = self._seek_audio_target_time
+            requested_at = self._seek_audio_requested_at
+            playing = self.playing
+            paused = self.paused
+            stopped = self.stopped
+
+        if target_time is None or stopped or paused or not playing:
+            return
+
+        now = time.time()
+        with self._audio_restart_lock:
+            inflight = self._audio_restart_inflight
+            last_restart = self._last_audio_restart_time
+
+        if inflight:
+            return
+        if (now - requested_at) < self._audio_resync_delay:
+            return
+        if (now - last_restart) < self._audio_restart_min_interval:
+            return
+
+        with self._lock:
+            if self._seek_audio_target_time is None:
+                return
+            target_time = self._seek_audio_target_time
+            self._seek_audio_target_time = None
+
+        self._start_audio_async(target_time)
+
     def play(self):
         """Start playback"""
+        start_time = 0
+        should_start_audio = False
         with self._lock:
             was_stopped = self.stopped
+            was_paused = self.paused
             self.playing = True
             self.paused = False
             self.stopped = False
@@ -282,25 +349,18 @@ class VideoPlayerThread(QThread):
             start_time = (self.current_frame / self.video_fps) if self.video_fps > 0 else 0
             
             # For paused state, use the stored pause position
-            if not was_stopped and self.paused:
+            if (not was_stopped) and was_paused:
                 start_time = self._pause_position
-                self.paused = False
             
-            # Start audio if available
-            if self.clip and self.clip.audio:
-                try:
-                    if was_stopped:
-                        # If we were stopped, start from the calculated position
-                        self._start_audio(start_time)
-                    else:
-                        # If we were paused, resume audio from the pause position
-                        self._resume_audio()
-                    debug("Audio playback started")
-                except Exception as e:
-                    error(f"Failed to start audio playback: {e}")
+            should_start_audio = bool(self.clip and self.clip.audio)
+            
+        if should_start_audio:
+            self._start_audio_async(start_time)
+            debug("Audio playback started")
 
     def pause(self):
         """Pause playback"""
+        should_pause_audio = False
         with self._lock:
             if self.playing and not self.stopped:
                 # Calculate the current position in the video
@@ -308,26 +368,32 @@ class VideoPlayerThread(QThread):
                 frames_advanced = int(elapsed_time * self.video_fps)
                 current_frame = self.current_frame + frames_advanced
                 self._pause_position = current_frame / self.video_fps if self.video_fps > 0 else 0
-                
-                # Pause audio
-                self._pause_audio()
+                should_pause_audio = True
                 
             self.paused = True
             self.playing = False
             debug("Playback paused")
 
+        if should_pause_audio:
+            self._pause_audio()
+
     def stop(self):
         """Stop playback"""
+        should_stop_audio = False
         with self._lock:
             self.playing = False
             self.paused = False
             self.stopped = True
             self.current_frame = 0
             self._pause_position = 0
+            self._seek_audio_target_time = None
+            self._seek_audio_requested_at = 0.0
+            should_stop_audio = True
             
-            # Stop audio
-            self._stop_audio_process()
             debug("Playback stopped")
+
+        if should_stop_audio:
+            self._stop_audio_process()
 
     def get_position(self):
         """Get current playback position (0.0 to 1.0)"""
@@ -338,30 +404,38 @@ class VideoPlayerThread(QThread):
 
     def seek(self, frame_number):
         """Seek to specific frame"""
+        seek_time = 0.0
+        should_resync_audio = False
+        should_emit_preview = False
+        clip = None
+        preview_timestamp = 0.0
         with self._lock:
             frame_number = max(0, min(frame_number, self.total_frames - 1))
             self.current_frame = frame_number
-            # When seeking, restart audio at the appropriate position
-            if self.clip and self.clip.audio:
-                try:
-                    # Calculate the time position for seeking
-                    seek_time = (frame_number / self.video_fps) if self.video_fps > 0 else 0
-                    
-                    # Update the pause position to the new location
-                    self._pause_position = seek_time
-                    
-                    # If currently playing, restart audio at new position
-                    if self.playing and not self.paused:
-                        self._start_audio(seek_time)
-                    elif self.paused:
-                        # If paused, update the stored position to the new seek position
-                        self._pause_position = seek_time
-                except Exception as e:
-                    error(f"Failed to seek audio: {e}")
+            seek_time = (frame_number / self.video_fps) if self.video_fps > 0 else 0
+            self._pause_position = seek_time
+            should_resync_audio = bool(self.clip and self.clip.audio and self.playing and not self.paused and not self.stopped)
+            should_emit_preview = bool(self.clip and (self.paused or self.stopped or not self.playing))
+            if should_emit_preview:
+                clip = self.clip
+                preview_timestamp = seek_time
+
+        if should_resync_audio:
+            self._request_audio_resync(seek_time)
+
+        if should_emit_preview and clip is not None:
+            try:
+                frame = clip.get_frame(t=preview_timestamp)
+                frame = frame[:, :, ::-1]
+                self.frame_ready.emit(frame)
+            except Exception as e:
+                error(f"Preview frame seek failed: {e}")
 
     def run(self):
         """Main playback loop"""
         while not self.exiting:
+            self._maybe_process_audio_resync()
+
             with self._lock:
                 playing = self.playing
                 paused = self.paused

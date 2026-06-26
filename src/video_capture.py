@@ -34,6 +34,15 @@ class VideoCaptureThread(QThread):
         self.fps = 0
         self.last_fps_time = time.time()
         self.last_command = None
+        self.last_command_time = 0.0
+        self.command_repeat_interval = 0.35
+        self.command_repeat_intervals = {
+            'seek_forward': 0.12,
+            'seek_back': 0.12,
+            'toggle': 0.30,
+            'vol_up': 0.18,
+            'vol_down': 0.18,
+        }
 
         # Processing config: 限制处理分辨率 & 检测频率（可在 UI 配置）
         self.proc_width = 640  # 将输入缩放到宽度 640（可调：480/640/960）
@@ -291,7 +300,15 @@ class VideoCaptureThread(QThread):
                                 pass
 
                             command = detection_result.get('cmd', None)
-                            if command and command != self.last_command:
+                            now_cmd_time = time.time()
+                            repeat_interval = self.command_repeat_intervals.get(command, self.command_repeat_interval)
+                            should_emit = (
+                                command and (
+                                    command != self.last_command or
+                                    (now_cmd_time - self.last_command_time) >= repeat_interval
+                                )
+                            )
+                            if should_emit:
                                 debug(f"Command detected: {command}")
                                 try:
                                     self.command_detected.emit(command)
@@ -299,6 +316,11 @@ class VideoCaptureThread(QThread):
                                     pass
                                 with self._lock:
                                     self.last_command = command
+                                    self.last_command_time = now_cmd_time
+                            elif not command:
+                                # 无命令时清空，避免后续同类手势被长期吞掉
+                                with self._lock:
+                                    self.last_command = None
                         except Exception as e:
                             error(f"Gesture detection error: {e}")
                             try:

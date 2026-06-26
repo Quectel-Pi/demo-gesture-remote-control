@@ -53,33 +53,64 @@ The system captures hand images through a camera and applies AI-based hand gestu
    - PySide6 == 6.5.3
    - protobuf == 3.20.3
 
-1. Create the `gesture-remote-control` folder on the board's terminal to store the project code.
+### Implementation Steps
 
-```bash
-mkdir gesture-remote-control
-cd gesture-remote-control
-```
-
-2. Clone the project using git.
+1. Clone the project using git.
 
 ```bash
 sudo apt update
-# Install git
 sudo apt install -y git
-# Clone the project
 git clone https://github.com/Quectel-Pi/demo-gesture-remote-control.git
 ```
 
-3. Run the following commands in sequence on the board's terminal.
+After execution, a `demo-gesture-remote-control` folder should be created in the current directory.
+
+2. Run the following commands in sequence on the board's terminal. If the terminal shows `Deployment complete`, deployment is successful.
 
 ```bash
 cd demo-gesture-remote-control
-# Set script permissions
 sudo chmod 755 install.sh
-# Execute the script
-./install.sh  # "Deployment complete" in the terminal indicates successful deployment
-# Reopen the terminal and verify the Python version
-python3 --version  # Output "Python 3.10.15" indicates successful installation
+./install.sh
+```
+
+If an error occurs while running `./install.sh`, or the terminal does not show `Deployment complete`, do not continue to the next steps yet. Re-run the installation script from the project root and make sure network connectivity is normal.
+
+3. Reopen the terminal and verify the Python version. If the output is `Python 3.10.15`, the installation is successful.
+
+```bash
+python3 --version
+```
+
+#### Run the program
+
+Run the `main.py` startup script in the `src` directory. If the program starts successfully, a camera preview window will open.
+
+```bash
+cd demo-gesture-remote-control/src/
+python3 main.py
+```
+![](docs/assets/main.png)
+
+### Enable Auto-start at Boot (Optional)
+
+This project provides `setup_autostart.sh` to configure a user-level systemd service.
+
+```bash
+cd gesture-remote-control/demo-gesture-remote-control/
+./setup_autostart.sh install
+```
+
+Service management:
+
+```bash
+./setup_autostart.sh status
+./setup_autostart.sh uninstall
+```
+
+Logs:
+
+```bash
+journalctl --user -u gesture-remote-control -f
 ```
 
 ## Project Structure
@@ -100,18 +131,10 @@ gesture-remote-control/
 ├── README.md                   # Project english documentation
 ├── README_zh.md                # Project chinese documentation
 ├── install.sh                  # Environment deployment script
+├── setup_autostart.sh          # Auto-start setup script
 └── requirements.txt            # Dependency list
 ```
 
-## Running the Application
-
-Run `main.py` from the `src` directory.
-
-```bash
-cd gesture-remote-control/demo-gesture-remote-control/src/
-python3 main.py
-```
-![](docs/assets/main.png)
-
 ## Reporting Issues
+If you encounter any issues during use, please submit technical inquiries on the [Quectel Official Forum](https://forumschinese.quectel.com/c/quectel-pi/58). Our technical support team will respond promptly.
 Issues and Pull Requests are welcome to help improve this project.
