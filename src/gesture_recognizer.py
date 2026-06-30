@@ -30,18 +30,25 @@ class MediaPipeGestureRecognizer:
         )
         self.drawer = mp.solutions.drawing_utils
         self.drawer_style = mp.solutions.drawing_styles
+        self.light_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
         # 光流与门控状态（参照 gesture_demo）
         self.prev_gray = None
         self.prev_points = None  # (N,1,2)
         self.flow_window_dx = deque(maxlen=4)
         self.flow_window_dy = deque(maxlen=4)
+        self.prev_fingertip_points = None
+        self.motion_window_dx = deque(maxlen=4)
+        self.motion_window_dy = deque(maxlen=4)
+        self.prev_swipe_track_id = None
 
         # 参数
         self.flow_thresh_ratio = 0.040
         self.flow_static_ratio = 0.010
         self.flow_static_ratio_open_palm = 0.014
         self.swipe_consistent_min = 4
+        self.finger_swipe_consistent_min = 3
+        self.finger_swipe_threshold_scale = 0.75
 
         self.ema_alpha = 0.25
         self.dy_ema = 0.0
@@ -141,6 +148,23 @@ class MediaPipeGestureRecognizer:
         self.prev_gray = gray.copy()
         self.prev_points = np.array([[p] for p in points], dtype=np.float32)
 
+    def _normalize_lighting(self, frame_bgr):
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        highlight_ratio = float(np.mean(gray > 235))
+        mean_light = float(np.mean(gray))
+        contrast = float(np.std(gray))
+        if highlight_ratio < 0.08 and mean_light < 175 and contrast > 42:
+            return frame_bgr, gray
+
+        lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+        light, channel_a, channel_b = cv2.split(lab)
+        light = self.light_clahe.apply(light)
+        if highlight_ratio >= 0.08 or mean_light >= 175:
+            light = cv2.convertScaleAbs(light, alpha=0.88, beta=-8)
+        normalized = cv2.cvtColor(cv2.merge((light, channel_a, channel_b)), cv2.COLOR_LAB2BGR)
+        normalized_gray = cv2.cvtColor(normalized, cv2.COLOR_BGR2GRAY)
+        return normalized, normalized_gray
+
     @staticmethod
     def _robust_median(values):
         if not values:
@@ -196,6 +220,36 @@ class MediaPipeGestureRecognizer:
         self.flow_window_dy.append(dy)
         return dx, dy
 
+    def _fingertip_motion(self, pts):
+        active_tips = []
+        for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)):
+            if self._is_finger_up(pts, tip, pip):
+                active_tips.append(tip)
+
+        if not active_tips:
+            self.prev_fingertip_points = None
+            return 0.0, 0.0
+
+        current_points = {idx: pts[idx] for idx in active_tips}
+        if self.prev_fingertip_points is None:
+            self.prev_fingertip_points = current_points
+            return 0.0, 0.0
+
+        dxs, dys = [], []
+        for idx, point in current_points.items():
+            if idx in self.prev_fingertip_points:
+                prev_point = self.prev_fingertip_points[idx]
+                dxs.append(float(point[0] - prev_point[0]))
+                dys.append(float(point[1] - prev_point[1]))
+
+        self.prev_fingertip_points = current_points
+        return self._robust_median(dxs), self._robust_median(dys)
+
+    def _reset_swipe_motion(self):
+        self.prev_fingertip_points = None
+        self.motion_window_dx.clear()
+        self.motion_window_dy.clear()
+
     @staticmethod
     def _consistent_sign(values, min_count=3):
         if not values:
@@ -203,6 +257,18 @@ class MediaPipeGestureRecognizer:
         pos = sum(1 for v in values if v > 0)
         neg = sum(1 for v in values if v < 0)
         return (pos >= min_count) or (neg >= min_count)
+
+    @staticmethod
+    def _dominant_sign(values, min_count=3):
+        if not values:
+            return 0
+        pos = sum(1 for v in values if v > 0)
+        neg = sum(1 for v in values if v < 0)
+        if pos >= min_count and pos > neg:
+            return 1
+        if neg >= min_count and neg > pos:
+            return -1
+        return 0
 
     def _throttle(self):
         now = int(time.time() * 1000)
@@ -285,6 +351,14 @@ class MediaPipeGestureRecognizer:
         dx_flow, dy_flow = self._hand_flow(gray, pts, (cx, cy))
         dx_med = float(np.median(self.flow_window_dx)) if self.flow_window_dx else 0.0
         dy_med = float(np.median(self.flow_window_dy)) if self.flow_window_dy else 0.0
+        finger_dx, finger_dy = self._fingertip_motion(pts)
+        finger_motion_active = abs(finger_dx) > abs(dx_med) or abs(finger_dy) > abs(dy_med)
+        if abs(finger_dx) > abs(dx_med):
+            dx_med = finger_dx
+        if abs(finger_dy) > abs(dy_med):
+            dy_med = finger_dy
+        self.motion_window_dx.append(dx_med)
+        self.motion_window_dy.append(dy_med)
 
         now_ms = int(time.time() * 1000)
         dt_ms = max(16, now_ms - self.last_frame_ms) if self.last_frame_ms else 33
@@ -327,9 +401,13 @@ class MediaPipeGestureRecognizer:
             margin_scale = 0.85 + 0.15 * (margin_px / 120.0)
         v_thr_base = self.vel_thresh_norm_vertical * (self.down_bias if is_down else 1.0)
         v_thr = v_thr_base * (margin_scale if is_down else 1.0)
+        if finger_motion_active:
+            v_thr *= self.finger_swipe_threshold_scale
+
+        swipe_consistent_min = self.finger_swipe_consistent_min if finger_motion_active else self.swipe_consistent_min
 
         is_vertical = abs(dy_med) > v_gate * abs(dx_med)
-        vertical_consistent = self._consistent_sign(self.flow_window_dy, self.swipe_consistent_min)
+        vertical_consistent = self._consistent_sign(self.motion_window_dy, swipe_consistent_min)
 
         speed_pass = (abs(self.dy_ema) > v_thr)
         path_pass = (is_down and down_path_sum > self.down_path_thresh)
@@ -343,12 +421,14 @@ class MediaPipeGestureRecognizer:
 
         # Horizontal swipe (seek)
         is_horizontal = abs(dx_med) > self.horizontal_angle_gate_ratio * abs(dy_med)
-        if four >= 1 and is_horizontal and abs(self.dx_ema) > self.vel_thresh_norm_horizontal and not self._dx_gate_high \
-           and self._consistent_sign(self.flow_window_dx, self.swipe_consistent_min):
+        horizontal_direction = self._dominant_sign(self.motion_window_dx, swipe_consistent_min)
+        h_thr = self.vel_thresh_norm_horizontal * (self.finger_swipe_threshold_scale if finger_motion_active else 1.0)
+        if four >= 1 and is_horizontal and abs(self.dx_ema) > h_thr and not self._dx_gate_high \
+           and horizontal_direction != 0:
             self._dx_gate_high = True
             self._last_motion_cmd_ms = now_ms
-            gesture = "swipe_left" if self.dx_ema > 0 else "swipe_right"
-            cmd = "seek_back" if self.dx_ema > 0 else "seek_forward"
+            gesture = "swipe_right" if horizontal_direction > 0 else "swipe_left"
+            cmd = "seek_forward" if horizontal_direction > 0 else "seek_back"
             return gesture, cmd
 
         # Open palm (toggle)
@@ -387,9 +467,9 @@ class MediaPipeGestureRecognizer:
         - mp_result: mediapipe hands process 返回的结果（用于绘制）
         """
         # 避免在每帧都新建 MediaPipe 实例，复用 self.hands
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-        h, w = frame_bgr.shape[:2]
+        detect_frame, gray = self._normalize_lighting(frame_bgr)
+        rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
+        h, w = detect_frame.shape[:2]
         # FPS 统计（较低频率更新）
         self.frame_count += 1
         if self.frame_count % 30 == 0:
@@ -429,21 +509,27 @@ class MediaPipeGestureRecognizer:
             # 保证在切换主手时清理历史以避免残留
             tid = assign_map.get(primary_det_idx)
             if tid is not None:
+                if tid != self.prev_swipe_track_id:
+                    self._reset_swipe_motion()
+                    self.prev_swipe_track_id = tid
                 self.open_palm_armed = self.tracks.get(tid, {}).get("armed", True)
 
             # 如果是新主手，清空光流历史与下滑积分
             # 通过检测 primary_lock_ms 实现短期锁定（在 _select_primary 中设置）
             gesture, cmd = self._infer(pts, w, h, gray)
 
-            # 在识别 open_palm 后更新 track armed 状态
-            if gesture == "open_palm" and tid in self.tracks:
-                self.tracks[tid]["armed"] = False
+            if tid is not None and tid in self.tracks:
+                self.tracks[tid]["armed"] = self.open_palm_armed
         else:
             # 没有主手时重置状态，回到画面后可快速触发
             self.open_palm_armed = True
             self.open_palm_latched = False
             self._open_palm_start_ms = 0
             self._open_palm_release_cnt = self.open_palm_release_frames
+            self.prev_swipe_track_id = None
+            self._reset_swipe_motion()
+            for track in self.tracks.values():
+                track["armed"] = True
 
         detection_result = {
             'hand_present': self.num_hands > 0,
