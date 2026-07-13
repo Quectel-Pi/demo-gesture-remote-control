@@ -45,7 +45,7 @@ class MediaPipeGestureRecognizer:
         # 参数
         self.flow_thresh_ratio = 0.040
         self.flow_static_ratio = 0.010
-        self.flow_static_ratio_open_palm = 0.014
+        self.flow_static_ratio_open_palm = 0.025
         self.swipe_consistent_min = 4
         self.finger_swipe_consistent_min = 3
         self.finger_swipe_threshold_scale = 0.75
@@ -74,10 +74,10 @@ class MediaPipeGestureRecognizer:
         self.down_path_thresh = 1.80
 
         # 张开手掌
-        self.open_palm_min_spread_ratio = 1.22
-        self.open_palm_max_spread_ratio = 2.01
-        self.open_palm_ms = 180
-        self.open_palm_cooldown_ms = 200
+        self.open_palm_min_spread_ratio = 1.10
+        self.open_palm_max_spread_ratio = 2.60
+        self.open_palm_ms = 90
+        self.open_palm_cooldown_ms = 120
         self._open_palm_start_ms = 0
         self._open_palm_release_cnt = 0
         self._last_motion_cmd_ms = 0
@@ -85,6 +85,16 @@ class MediaPipeGestureRecognizer:
         self.open_palm_armed = True
         self.open_palm_latched = False
         self.open_palm_release_frames = 3
+
+        # 握拳暂停
+        self.fist_max_spread_ratio = 1.18
+        self.fist_ms = 160
+        self.fist_cooldown_ms = 200
+        self._fist_start_ms = 0
+        self._fist_release_cnt = 0
+        self.fist_armed = True
+        self.fist_latched = False
+        self.fist_release_frames = 3
 
         # 轨迹 & 主手选择
         self.tracks = {}
@@ -352,13 +362,29 @@ class MediaPipeGestureRecognizer:
         dx_med = float(np.median(self.flow_window_dx)) if self.flow_window_dx else 0.0
         dy_med = float(np.median(self.flow_window_dy)) if self.flow_window_dy else 0.0
         finger_dx, finger_dy = self._fingertip_motion(pts)
-        finger_motion_active = abs(finger_dx) > abs(dx_med) or abs(finger_dy) > abs(dy_med)
-        if abs(finger_dx) > abs(dx_med):
+        finger_motion_active = four < 4 and (abs(finger_dx) > abs(dx_med) or abs(finger_dy) > abs(dy_med))
+        if finger_motion_active and abs(finger_dx) > abs(dx_med):
             dx_med = finger_dx
-        if abs(finger_dy) > abs(dy_med):
+        if finger_motion_active and abs(finger_dy) > abs(dy_med):
             dy_med = finger_dy
-        self.motion_window_dx.append(dx_med)
-        self.motion_window_dy.append(dy_med)
+
+        spread = self._palm_spread(pts, cx, cy)
+        open_palm_pose = (four >= 4) and (self.open_palm_min_spread_ratio <= spread <= self.open_palm_max_spread_ratio)
+        fist_pose = (four == 0)
+        pose_swipe_blocked = (four >= 4) or fist_pose
+
+        if pose_swipe_blocked:
+            self.motion_window_dx.clear()
+            self.motion_window_dy.clear()
+            self.dy_hist_norm.clear()
+            self.dy_hist_t.clear()
+            self.dy_ema = 0.0
+            self.dx_ema = 0.0
+            self._dy_gate_high = False
+            self._dx_gate_high = False
+        else:
+            self.motion_window_dx.append(dx_med)
+            self.motion_window_dy.append(dy_med)
 
         now_ms = int(time.time() * 1000)
         dt_ms = max(16, now_ms - self.last_frame_ms) if self.last_frame_ms else 33
@@ -370,19 +396,21 @@ class MediaPipeGestureRecognizer:
         dx_speed = (dx_med * 1000.0) / (dt_ms + 1e-6)
         dy_norm = dy_speed / (hand_w + 1e-6)
         dx_norm = dx_speed / (hand_w + 1e-6)
-        self.dy_ema = (1 - self.ema_alpha) * self.dy_ema + self.ema_alpha * dy_norm
-        self.dx_ema = (1 - self.ema_alpha) * self.dx_ema + self.ema_alpha * dx_norm
+        if not pose_swipe_blocked:
+            self.dy_ema = (1 - self.ema_alpha) * self.dy_ema + self.ema_alpha * dy_norm
+            self.dx_ema = (1 - self.ema_alpha) * self.dx_ema + self.ema_alpha * dx_norm
 
         # ---- accumulate down path within window ----
         dy_norm_inst = dy_norm
-        self.dy_hist_norm.append(dy_norm_inst)
-        self.dy_hist_t.append(now_ms)
         down_path_sum = 0.0
-        for v, t in zip(reversed(self.dy_hist_norm), reversed(self.dy_hist_t)):
-            if (now_ms - t) > self.dy_path_window_ms:
-                break
-            if v > 0:
-                down_path_sum += v
+        if not pose_swipe_blocked:
+            self.dy_hist_norm.append(dy_norm_inst)
+            self.dy_hist_t.append(now_ms)
+            for v, t in zip(reversed(self.dy_hist_norm), reversed(self.dy_hist_t)):
+                if (now_ms - t) > self.dy_path_window_ms:
+                    break
+                if v > 0:
+                    down_path_sum += v
 
         # hysteresis reset
         if abs(self.dy_ema) <= self.vel_thresh_norm_vertical * 0.8:
@@ -412,7 +440,8 @@ class MediaPipeGestureRecognizer:
         speed_pass = (abs(self.dy_ema) > v_thr)
         path_pass = (is_down and down_path_sum > self.down_path_thresh)
 
-        if four >= 1 and is_vertical and (speed_pass or path_pass) and not self._dy_gate_high and vertical_consistent:
+        if not pose_swipe_blocked and four >= 1 and is_vertical and (speed_pass or path_pass) \
+           and not self._dy_gate_high and vertical_consistent:
             self._dy_gate_high = True
             self._last_motion_cmd_ms = now_ms
             gesture = "swipe_up" if self.dy_ema < 0 else "swipe_down"
@@ -423,7 +452,7 @@ class MediaPipeGestureRecognizer:
         is_horizontal = abs(dx_med) > self.horizontal_angle_gate_ratio * abs(dy_med)
         horizontal_direction = self._dominant_sign(self.motion_window_dx, swipe_consistent_min)
         h_thr = self.vel_thresh_norm_horizontal * (self.finger_swipe_threshold_scale if finger_motion_active else 1.0)
-        if four >= 1 and is_horizontal and abs(self.dx_ema) > h_thr and not self._dx_gate_high \
+        if not pose_swipe_blocked and four >= 1 and is_horizontal and abs(self.dx_ema) > h_thr and not self._dx_gate_high \
            and horizontal_direction != 0:
             self._dx_gate_high = True
             self._last_motion_cmd_ms = now_ms
@@ -431,11 +460,10 @@ class MediaPipeGestureRecognizer:
             cmd = "seek_forward" if horizontal_direction > 0 else "seek_back"
             return gesture, cmd
 
-        # Open palm (toggle)
+        # Open palm (play)
         cooling = (now_ms - self._last_motion_cmd_ms) < self.open_palm_cooldown_ms
         is_static = (abs(dx_med) < flow_static_px) and (abs(dy_med) < flow_static_px)
-        spread = self._palm_spread(pts, cx, cy)
-        spread_ok = (four >= 4) and (self.open_palm_min_spread_ratio <= spread <= self.open_palm_max_spread_ratio)
+        spread_ok = open_palm_pose
         open_candidate = (not cooling) and is_static and spread_ok
 
         if not open_candidate:
@@ -454,7 +482,30 @@ class MediaPipeGestureRecognizer:
                     self.open_palm_latched = True
                     self.open_palm_armed = False
                     gesture = "open_palm"
-                    cmd = "toggle"
+                    cmd = "play"
+                    return gesture, cmd
+
+        # Fist (pause)
+        fist_cooling = (now_ms - self._last_motion_cmd_ms) < self.fist_cooldown_ms
+        fist_candidate = (not fist_cooling) and is_static and (four == 0) and (spread <= self.fist_max_spread_ratio)
+
+        if not fist_candidate:
+            self._fist_start_ms = 0
+            self._fist_release_cnt = min(self.fist_release_frames, self._fist_release_cnt + 1)
+            if self._fist_release_cnt >= self.fist_release_frames:
+                self.fist_latched = False
+                self.fist_armed = True
+        else:
+            self._fist_release_cnt = 0
+            if self.fist_armed and not self.fist_latched:
+                if self._fist_start_ms == 0:
+                    self._fist_start_ms = now_ms
+                elif (now_ms - self._fist_start_ms) >= self.fist_ms:
+                    self._fist_start_ms = 0
+                    self.fist_latched = True
+                    self.fist_armed = False
+                    gesture = "fist"
+                    cmd = "pause"
                     return gesture, cmd
 
         return None, None
@@ -526,6 +577,10 @@ class MediaPipeGestureRecognizer:
             self.open_palm_latched = False
             self._open_palm_start_ms = 0
             self._open_palm_release_cnt = self.open_palm_release_frames
+            self.fist_armed = True
+            self.fist_latched = False
+            self._fist_start_ms = 0
+            self._fist_release_cnt = self.fist_release_frames
             self.prev_swipe_track_id = None
             self._reset_swipe_motion()
             for track in self.tracks.values():
