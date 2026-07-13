@@ -24,6 +24,9 @@ class VideoCaptureThread(QThread):
         self.exiting = False
         self._closed = True
         self._lock = threading.RLock()
+        self.camera_id = None
+        self.reconnect_interval = 2.0
+        self._last_reconnect_attempt = 0.0
 
         # Component initialization
         # MediaPipeGestureRecognizer will be created once and reused
@@ -37,11 +40,13 @@ class VideoCaptureThread(QThread):
         self.last_command_time = 0.0
         self.command_repeat_interval = 0.35
         self.command_repeat_intervals = {
-            'seek_forward': 0.12,
-            'seek_back': 0.12,
-            'toggle': 0.30,
-            'vol_up': 0.18,
-            'vol_down': 0.18,
+            'seek_forward': 0.45,
+            'seek_back': 0.45,
+            'play': 0.50,
+            'pause': 0.50,
+            'toggle': 0.50,
+            'vol_up': 0.45,
+            'vol_down': 0.45,
         }
 
         # Processing config: 限制处理分辨率 & 检测频率（可在 UI 配置）
@@ -87,7 +92,7 @@ class VideoCaptureThread(QThread):
         if camera_id is None:
             camera_id = self.find_available_camera()
             if camera_id is None:
-                raise Exception("No available camera device found")
+                error("No available camera device found, waiting for camera reconnect")
 
         debug(f"Starting camera capture on device ID: {camera_id}")
 
@@ -95,26 +100,12 @@ class VideoCaptureThread(QThread):
         #self._safe_release_capture()
 
         with self._lock:
-            self.cap = cv2.VideoCapture(camera_id)
-            if not (self.cap and self.cap.isOpened()):
-                # 尝试释放并报错
-                try:
-                    if self.cap is not None:
-                        self.cap.release()
-                except Exception:
-                    pass
-                self.cap = None
-                raise Exception(f"Cannot open camera device {camera_id}")
+            self.camera_id = camera_id
+            if self.gesture is None or getattr(self.gesture, "hands", None) is None:
+                self.gesture = MediaPipeGestureRecognizer()
 
-            # 尝试设置合适的摄像头参数（视驱动支持情况）
-            try:
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                self.cap.set(cv2.CAP_PROP_FPS, 30)
-            except Exception:
-                pass
-
-            self._closed = False
+        if camera_id is not None:
+            self._open_capture(camera_id)
 
         with self._lock:
             self.running = True
@@ -131,6 +122,44 @@ class VideoCaptureThread(QThread):
         except RuntimeError:
             # 如果线程无法启动（例如已结束），记录错误
             error("Failed to start capture thread")
+
+    def _open_capture(self, camera_id):
+        cap = cv2.VideoCapture(camera_id)
+        if not (cap and cap.isOpened()):
+            try:
+                if cap is not None:
+                    cap.release()
+            except Exception:
+                pass
+            return False
+
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+        except Exception:
+            pass
+
+        with self._lock:
+            self._release_capture_only()
+            self.cap = cap
+            self._closed = False
+            self.camera_id = camera_id
+        debug(f"Camera connected on device ID: {camera_id}")
+        return True
+
+    def _release_capture_only(self):
+        with self._lock:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception as e:
+                    error(f"Error releasing camera capture: {e}")
+                finally:
+                    self.cap = None
+                    self._closed = True
+            else:
+                self._closed = True
 
     def stop_capture(self):
         debug("Stopping camera capture...")
@@ -198,7 +227,7 @@ class VideoCaptureThread(QThread):
             else:
                 return None
         else:
-            self.frame_remain = 5
+            self.frame_remain = 10
             self.command_remain = cmd
         return gesture_cmd
 
@@ -206,13 +235,28 @@ class VideoCaptureThread(QThread):
         self._closed = False
         self.running = True
         self._last_detect_time = 0.0
+        read_failures = 0
         try:
             while True:
                 with self._lock:
-                    should_continue = (not self.exiting) and self.running and (self.cap is not None) and (not self._closed)
+                    should_continue = (not self.exiting) and self.running
+                    cap_ready = (self.cap is not None) and (not self._closed)
+                    camera_id = self.camera_id
 
                 if not should_continue:
                     break
+
+                if not cap_ready:
+                    now = time.time()
+                    if now - self._last_reconnect_attempt >= self.reconnect_interval:
+                        self._last_reconnect_attempt = now
+                        next_camera_id = camera_id
+                        if next_camera_id is None:
+                            next_camera_id = self.find_available_camera()
+                        if next_camera_id is not None:
+                            self._open_capture(next_camera_id)
+                    time.sleep(0.1)
+                    continue
 
                 try:
                     ret, frame = False, None
@@ -228,9 +272,14 @@ class VideoCaptureThread(QThread):
                             ret = False
 
                     if not ret or frame is None:
-                        # 如果读帧失败，稍等并重试
+                        read_failures += 1
+                        if read_failures >= 30:
+                            error("Cannot read frame from camera, waiting for reconnect")
+                            self._release_capture_only()
+                            read_failures = 0
                         time.sleep(0.01)
                         continue
+                    read_failures = 0
 
                     # 可选：按比例缩放以减少后续计算量（保持纵横比）
                     h, w = frame.shape[:2]

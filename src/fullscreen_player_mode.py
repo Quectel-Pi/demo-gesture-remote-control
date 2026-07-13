@@ -284,22 +284,28 @@ class FullScreenPlayer(QWidget):
         if detection_result:
             hand_present = detection_result.get('hand_present', False)
             gesture_cmd = detection_result.get('cmd', None)
-            # is_hand = detection_result.get('is_hand', False)
             if hand_present:
-                playback_text="Hand detected"
+                playback_text = "Gesture Active"
             else:
-                playback_text="No hand detected"
+                playback_text = "No Hand"
         else:
-            playback_text="Detection disabled"
+            playback_text = "Detection Inactive"
 
         if gesture_cmd is None:
-            gesture_cmd = ' '
+            gesture_cmd = "Waiting"
             if self.frame_remain >= 0:
                 self.frame_remain -= 1
-                gesture_cmd = self.last_command
+                gesture_cmd = self.last_command or gesture_cmd
         else:
             self.frame_remain = 5
-            self.last_command = gesture_cmd
+            if self.parent_window and hasattr(self.parent_window, 'command_display_text'):
+                self.last_command = self.parent_window.command_display_text(gesture_cmd)
+            else:
+                self.last_command = gesture_cmd
+            gesture_cmd = self.last_command
+            if self.parent_window and hasattr(self.parent_window, 'control_mode_text'):
+                mode_text, _ = self.parent_window.control_mode_text(detection_result.get('cmd', None))
+                playback_text = mode_text
         self.show_overlays(
             detection_text=gesture_cmd,
             playback_text=playback_text,
