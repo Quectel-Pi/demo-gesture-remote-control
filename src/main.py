@@ -7,7 +7,7 @@ os.environ["QT_LOGGING_RULES"] = "qt.pointer.dispatch=false"
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, 
     QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QCheckBox, QFrame,
-    QSplitter, QGridLayout, QSlider,
+    QSplitter, QGridLayout, QSlider, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -30,11 +30,13 @@ class MainWindow(QMainWindow):
         self.is_fullscreen = False
         self.video_duration = 0
         self.video_position = 0
+        self.latest_video_frame = None
         self.is_slider_pressed = False
         self.last_control_command = None
         self.last_gesture_display_until_ms = 0
-        self.gesture_display_hold_ms = 2000
+        self.gesture_display_hold_ms = 500
         self.gesture_command_locked_until_ms = 0
+        self.current_language = "en"
         
          # Fullscreen player window
         self.fullscreen_player = None
@@ -64,6 +66,39 @@ class MainWindow(QMainWindow):
         self.progress_timer = QTimer()
         self.progress_timer.timeout.connect(self.update_progress)
         self.progress_timer.start(100)
+
+    def tr(self, en_text, zh_text):
+        return en_text if self.current_language == "en" else zh_text
+
+    def translate_known_text(self, text):
+        known_pairs = [
+            ("Starting camera...", "正在启动摄像头..."),
+            ("Camera Stopped", "摄像头已关闭"),
+            ("Click to select a video file", "点击选择视频文件"),
+            ("Running", "运行中"),
+            ("Failed to Start", "启动失败"),
+            ("Stopped", "已停止"),
+            ("Detecting", "检测中"),
+            ("Camera Off", "摄像头已关闭"),
+            ("Disabled", "已禁用"),
+            ("Waiting", "等待中"),
+            ("No Hand", "未检测到手"),
+            ("Gesture Active", "手势激活"),
+            ("Not Loaded", "未加载"),
+            ("Loaded", "已加载"),
+            ("Load Failed", "加载失败"),
+            ("Playing", "播放中"),
+            ("Paused", "已暂停"),
+            ("Playback Completed", "播放完成"),
+            ("Auto Playing", "自动播放中"),
+            ("Auto Play Failed", "自动播放失败"),
+            ("Inactive", "未激活"),
+            ("Done, Waiting", "完成，等待中"),
+        ]
+        for en_text, zh_text in known_pairs:
+            if text == en_text or text == zh_text:
+                return self.tr(en_text, zh_text)
+        return text
         
     def setup_styles(self):
         self.setStyleSheet("""
@@ -205,6 +240,21 @@ class MainWindow(QMainWindow):
                 background-color: #74c7ec;
             }
         """)
+
+        self.language_btn = QPushButton("中文")
+        self.language_btn.setFixedSize(max(90, int(window_width * 0.12)), 30)
+        self.language_btn.clicked.connect(self.toggle_language)
+        self.language_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #89b4fa;
+                color: #1e1e2e;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #74c7ec;
+            }
+        """)
+
          #  Fullscreen play button
         self.fullscreen_play_btn = QPushButton(" Fullscreen Play Mode")
         self.fullscreen_play_btn.setFixedSize(max(130, int(window_width * 0.22)), 30)
@@ -229,11 +279,12 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(10)
         
         # Camera display area
-        camera_group = QGroupBox("📷 Camera Feed")
+        self.camera_group = QGroupBox("📷 Camera Feed")
         camera_layout = QVBoxLayout()
         
         self.camera_display = QLabel("Starting camera...")
         self.camera_display.setAlignment(Qt.AlignCenter)
+        self.camera_display.setScaledContents(True)  # Stretch to fill, no black bars
         # Use relative dimensions instead of fixed sizes
         self.camera_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.26))
         self.camera_display.setStyleSheet("""
@@ -247,15 +298,16 @@ class MainWindow(QMainWindow):
         """)
         
         camera_layout.addWidget(self.camera_display)
-        camera_group.setLayout(camera_layout)
-        left_layout.addWidget(camera_group)
+        self.camera_group.setLayout(camera_layout)
+        left_layout.addWidget(self.camera_group)
         
         # Video playback area
-        video_group = QGroupBox("🎬 Video Player")
+        self.video_group = QGroupBox("🎬 Video Player")
         video_layout = QVBoxLayout()
         
         self.video_display = QLabel("Click to select a video file")
         self.video_display.setAlignment(Qt.AlignCenter)
+        self.video_display.setScaledContents(True)  # Stretch to fill, no black bars
         # Use relative dimensions instead of fixed sizes
         self.video_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.26))
         self.video_display.setStyleSheet("""
@@ -312,8 +364,8 @@ class MainWindow(QMainWindow):
         
         video_layout.addWidget(self.video_display)
         video_layout.addWidget(video_controls)
-        video_group.setLayout(video_layout)
-        left_layout.addWidget(video_group)
+        self.video_group.setLayout(video_layout)
+        left_layout.addWidget(self.video_group)
         
         # Right side - control panel
         right_widget = QWidget()
@@ -325,20 +377,22 @@ class MainWindow(QMainWindow):
         screen_show_layout.setContentsMargins(6, 4, 6, 4)
         screen_show_layout.setColumnStretch(0, 1)
         screen_show_layout.setColumnStretch(1, 1)
-        screen_show_layout.addWidget(self.fullscreen_play_btn, 0, 0)
-        screen_show_layout.addWidget(self.fullscreen_btn, 0, 1)
+        screen_show_layout.setColumnStretch(2, 1)
+        screen_show_layout.addWidget(self.language_btn, 0, 0)
+        screen_show_layout.addWidget(self.fullscreen_play_btn, 0, 1)
+        screen_show_layout.addWidget(self.fullscreen_btn, 0, 2)
         screen_show_group.setLayout(screen_show_layout)
         right_layout.addWidget(screen_show_group)
         # file_info_layout = QVBoxLayout()
         
         # Real-time status display
-        status_group = QGroupBox("📊 System Status")
+        self.status_group = QGroupBox("📊 System Status")
         status_layout = QGridLayout()
         status_layout.setVerticalSpacing(4)
         
         # Camera status
-        cam_status_label = QLabel("📷 Camera:")
-        cam_status_label.setStyleSheet("color: #a6adc8;")
+        self.cam_status_label = QLabel("📷 Camera:")
+        self.cam_status_label.setStyleSheet("color: #a6adc8;")
         
         self.cam_status = QLabel("Running")
         self.cam_status.setObjectName("status_value")
@@ -346,8 +400,8 @@ class MainWindow(QMainWindow):
         self.cam_status.setFixedSize(int(window_width * 0.1), 25)  # Use relative width
         
         # FPS display
-        fps_label = QLabel("⚡ Camera FPS:")
-        fps_label.setStyleSheet("color: #a6adc8;")
+        self.fps_label = QLabel("⚡ Camera FPS:")
+        self.fps_label.setStyleSheet("color: #a6adc8;")
         
         self.fps_display = QLabel("0.0")
         self.fps_display.setObjectName("status_value")
@@ -355,8 +409,8 @@ class MainWindow(QMainWindow):
         self.fps_display.setFixedSize(120, 25)  # Fixed size to prevent layout changes
         
         # Detection status
-        detect_status_label = QLabel("🔍 Detection Status:")
-        detect_status_label.setStyleSheet("color: #a6adc8;")
+        self.detect_status_label = QLabel("🔍 Detection Status:")
+        self.detect_status_label.setStyleSheet("color: #a6adc8;")
         
         self.detect_status = QLabel("Detecting...")
         self.detect_status.setObjectName("status_value")
@@ -364,8 +418,8 @@ class MainWindow(QMainWindow):
         self.detect_status.setFixedSize(120, 25)  # Fixed size to prevent layout changes
         
         # Video playback status
-        video_status_label = QLabel("▶️ Video Status:")
-        video_status_label.setStyleSheet("color: #a6adc8;")
+        self.video_status_label = QLabel("▶️ Video Status:")
+        self.video_status_label.setStyleSheet("color: #a6adc8;")
         
         self.video_status = QLabel("Not Loaded")
         self.video_status.setObjectName("status_value")
@@ -373,48 +427,54 @@ class MainWindow(QMainWindow):
         self.video_status.setFixedSize(120, 25)  # Fixed size to prevent layout changes
 
         # Gesture control status
-        gesture_mode_label = QLabel("🎛️ Gesture Mode:")
-        gesture_mode_label.setStyleSheet("color: #a6adc8;")
+        self.gesture_mode_label = QLabel("🎛️ Gesture Mode:")
+        self.gesture_mode_label.setStyleSheet("color: #a6adc8;")
 
         self.gesture_mode_status = QLabel("Inactive")
         self.gesture_mode_status.setObjectName("status_value")
         self.gesture_mode_status.setStyleSheet("background-color: #585b70; color: #ffffff;")
-        self.gesture_mode_status.setFixedSize(120, 25)
+        self.gesture_mode_status.setFixedHeight(25)
+        self.gesture_mode_status.setMinimumWidth(170)
+        self.gesture_mode_status.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        gesture_action_label = QLabel("🖐️ Current Gesture:")
-        gesture_action_label.setStyleSheet("color: #a6adc8;")
+        self.gesture_action_label = QLabel("🖐️ Current Gesture:")
+        self.gesture_action_label.setStyleSheet("color: #a6adc8;")
 
         self.gesture_action_status = QLabel("Waiting")
         self.gesture_action_status.setObjectName("status_value")
         self.gesture_action_status.setStyleSheet("background-color: #585b70; color: #ffffff;")
-        self.gesture_action_status.setFixedSize(120, 25)
+        self.gesture_action_status.setFixedHeight(25)
+        self.gesture_action_status.setMinimumWidth(170)
+        self.gesture_action_status.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
         # Add to grid layout
-        status_layout.addWidget(cam_status_label, 0, 0)
+        status_layout.addWidget(self.cam_status_label, 0, 0)
         status_layout.addWidget(self.cam_status, 0, 1)
-        status_layout.addWidget(fps_label, 0, 2)
+        status_layout.addWidget(self.fps_label, 0, 2)
         status_layout.addWidget(self.fps_display, 0, 3)
         
-        status_layout.addWidget(detect_status_label, 1, 0)
+        status_layout.addWidget(self.detect_status_label, 1, 0)
         status_layout.addWidget(self.detect_status, 1, 1)
-        status_layout.addWidget(video_status_label, 1, 2)
+        status_layout.addWidget(self.video_status_label, 1, 2)
         status_layout.addWidget(self.video_status, 1, 3)
 
-        status_layout.addWidget(gesture_mode_label, 2, 0)
+        status_layout.addWidget(self.gesture_mode_label, 2, 0)
         status_layout.addWidget(self.gesture_mode_status, 2, 1)
-        status_layout.addWidget(gesture_action_label, 2, 2)
+        status_layout.addWidget(self.gesture_action_label, 2, 2)
         status_layout.addWidget(self.gesture_action_status, 2, 3)
+        status_layout.setColumnStretch(1, 1)
+        status_layout.setColumnStretch(3, 1)
         
-        status_group.setLayout(status_layout)
-        right_layout.addWidget(status_group)
+        self.status_group.setLayout(status_layout)
+        right_layout.addWidget(self.status_group)
         # right_layout.addWidget(file_info_group)
         
         # Control instructions
-        instruction_group = QGroupBox("📋 Control Instructions")
+        self.instruction_group = QGroupBox("📋 Control Instructions")
         instruction_layout = QVBoxLayout()
         instruction_layout.setContentsMargins(6, 4, 6, 4)
         
-        instructions = QLabel(
+        self.instructions_label = QLabel(
             "<b>Gesture Control Commands:</b><br>"
             "• Open palm (5 fingers) → Play<br>"
             "• Fist → Pause<br>"
@@ -428,15 +488,15 @@ class MainWindow(QMainWindow):
             "• Ensure adequate lighting"
         )
 
-        instructions.setStyleSheet("color: #cdd6f4; padding: 2px;")
-        instructions.setWordWrap(True)
+        self.instructions_label.setStyleSheet("color: #cdd6f4; padding: 2px;")
+        self.instructions_label.setWordWrap(True)
         
-        instruction_layout.addWidget(instructions)
-        instruction_group.setLayout(instruction_layout)
-        right_layout.addWidget(instruction_group)
+        instruction_layout.addWidget(self.instructions_label)
+        self.instruction_group.setLayout(instruction_layout)
+        right_layout.addWidget(self.instruction_group)
         
         # Camera controls
-        camera_control_group = QGroupBox("🎮 Camera Controls")
+        self.camera_control_group = QGroupBox("🎮 Camera Controls")
         camera_control_layout = QVBoxLayout()
         camera_control_layout.setContentsMargins(6, 4, 6, 4)
         camera_control_layout.setSpacing(4)
@@ -456,11 +516,11 @@ class MainWindow(QMainWindow):
         camera_control_layout.addWidget(self.camera_toggle_btn)
         camera_control_layout.addWidget(self.detect_checkbox)
         camera_control_layout.addWidget(self.landmarks_checkbox)
-        camera_control_group.setLayout(camera_control_layout)
-        right_layout.addWidget(camera_control_group)
+        self.camera_control_group.setLayout(camera_control_layout)
+        right_layout.addWidget(self.camera_control_group)
         
         # Video file controls
-        file_control_group = QGroupBox("📁 Video File Controls")
+        self.file_control_group = QGroupBox("📁 Video File Controls")
         file_control_layout = QVBoxLayout()
         file_control_layout.setContentsMargins(6, 4, 6, 4)
         
@@ -469,8 +529,8 @@ class MainWindow(QMainWindow):
         self.select_video_btn.setFixedHeight(32)
         
         file_control_layout.addWidget(self.select_video_btn)
-        file_control_group.setLayout(file_control_layout)
-        right_layout.addWidget(file_control_group)
+        self.file_control_group.setLayout(file_control_layout)
+        right_layout.addWidget(self.file_control_group)
         
         # Add to splitter
         content_splitter.addWidget(left_widget)
@@ -481,6 +541,93 @@ class MainWindow(QMainWindow):
         
         # Setup fullscreen shortcut
         self.fullscreen_btn.setShortcut("F11")
+        self.apply_language()
+
+    def toggle_language(self):
+        self.current_language = "zh" if self.current_language == "en" else "en"
+        self.apply_language()
+
+    def apply_language(self):
+        is_en = self.current_language == "en"
+
+        self.setWindowTitle('🖐️ Gesture Remote Control' if is_en else '🖐️ 手势遥控器')
+        self.language_btn.setText("中文" if is_en else "English")
+
+        if self.is_fullscreen:
+            self.fullscreen_btn.setText("Exit Fullscreen" if is_en else "退出全屏")
+        else:
+            self.fullscreen_btn.setText("Fullscreen" if is_en else "全屏")
+
+        self.fullscreen_play_btn.setText("Fullscreen Play Mode" if is_en else "全屏播放模式")
+        self.video_play_btn.setText("Play" if is_en else "播放")
+        self.video_pause_btn.setText("Pause" if is_en else "暂停")
+        self.video_stop_btn.setText("Stop" if is_en else "停止")
+        self.select_video_btn.setText("Select Video File" if is_en else "选择视频文件")
+
+        if self.camera_active:
+            self.camera_toggle_btn.setText("Turn Off Camera" if is_en else "关闭摄像头")
+        else:
+            self.camera_toggle_btn.setText("Start Camera" if is_en else "启动摄像头")
+
+        self.detect_checkbox.setText("Enable Gesture Detection" if is_en else "启用手势检测")
+        self.landmarks_checkbox.setText("Show Landmarks" if is_en else "显示关键点")
+
+        self.camera_group.setTitle("📷 Camera Feed" if is_en else "📷 摄像头画面")
+        self.video_group.setTitle("🎬 Video Player" if is_en else "🎬 视频播放器")
+        self.status_group.setTitle("📊 System Status" if is_en else "📊 系统状态")
+        self.instruction_group.setTitle("📋 Control Instructions" if is_en else "📋 控制说明")
+        self.camera_control_group.setTitle("🎮 Camera Controls" if is_en else "🎮 摄像头控制")
+        self.file_control_group.setTitle("📁 Video File Controls" if is_en else "📁 视频文件控制")
+
+        self.cam_status_label.setText("📷 Camera:" if is_en else "📷 摄像头：")
+        self.fps_label.setText("⚡ Camera FPS:" if is_en else "⚡ 摄像头帧率：")
+        self.detect_status_label.setText("🔍 Detection Status:" if is_en else "🔍 检测状态：")
+        self.video_status_label.setText("▶️ Video Status:" if is_en else "▶️ 视频状态：")
+        self.gesture_mode_label.setText("🎛️ Gesture Mode:" if is_en else "🎛️ 手势模式：")
+        self.gesture_action_label.setText("🖐️ Current Gesture:" if is_en else "🖐️ 当前手势：")
+
+        self.camera_display.setText(self.translate_known_text(self.camera_display.text()))
+        self.video_display.setText(self.translate_known_text(self.video_display.text()))
+        self.cam_status.setText(self.translate_known_text(self.cam_status.text()))
+        self.detect_status.setText(self.translate_known_text(self.detect_status.text()))
+        self.video_status.setText(self.translate_known_text(self.video_status.text()))
+        self.gesture_mode_status.setText(self.translate_known_text(self.gesture_mode_status.text()))
+        self.gesture_action_status.setText(self.translate_known_text(self.gesture_action_status.text()))
+
+        self.instructions_label.setText(
+            "<b>Gesture Control Commands:</b><br>"
+            "• Open palm (5 fingers spread) → Play<br>"
+            "• Closed fist (all fingers folded) → Pause<br>"
+            "• Swipe right (1-3 fingers) → Fast forward 5 seconds<br>"
+            "• Swipe left (1-3 fingers) → Rewind 5 seconds<br>"
+            "• Swipe up (1-3 fingers) → Volume +5%<br>"
+            "• Swipe down (1-3 fingers) → Volume -5%<br>"
+            "<b>Note:</b><br>"
+            "• Keep your hand within the camera view<br>"
+            "• Perform gestures clearly and steadily<br>"
+            "• Ensure adequate lighting"
+            if is_en else
+            "<b>手势控制指令：</b><br>"
+            "• 张开手掌（5 指展开）→ 播放<br>"
+            "• 握拳（所有手指收起）→ 暂停<br>"
+            "• 向右滑动（1-3 根手指）→ 快进 5 秒<br>"
+            "• 向左滑动（1-3 根手指）→ 快退 5 秒<br>"
+            "• 向上滑动（1-3 根手指）→ 音量 +5%<br>"
+            "• 向下滑动（1-3 根手指）→ 音量 -5%<br>"
+            "<b>注意：</b><br>"
+            "• 请将手保持在摄像头视野范围内<br>"
+            "• 手势动作请清晰稳定<br>"
+            "• 请确保环境光线充足"
+        )
+        
+        # Update fullscreen player buttons if it exists
+        if self.fullscreen_player and self.is_in_fullscreen_mode:
+            self.fullscreen_player.back_btn.setText(self.tr("Back", "返回"))
+            # Update play/pause button based on current playback state
+            if self.video_player_thread.playing and not self.video_player_thread.paused:
+                self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
+            else:
+                self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
 
     def _set_badge(self, label, text, background, color="#000000"):
         label.setText(text)
@@ -488,24 +635,24 @@ class MainWindow(QMainWindow):
 
     def command_display_text(self, command):
         labels = {
-            "play": "Play",
-            "pause": "Pause",
-            "toggle": "Play/Pause",
-            "seek_forward": "Fast Forward 5s",
-            "seek_back": "Rewind 5s",
-            "vol_up": "Volume +5%",
-            "vol_down": "Volume -5%",
+            "play": self.tr("Play", "播放"),
+            "pause": self.tr("Pause", "暂停"),
+            "toggle": self.tr("Play/Pause", "播放/暂停"),
+            "seek_forward": self.tr("Fast Forward 5s", "快进 5 秒"),
+            "seek_back": self.tr("Rewind 5s", "快退 5 秒"),
+            "vol_up": self.tr("Volume +5%", "音量 +5%"),
+            "vol_down": self.tr("Volume -5%", "音量 -5%"),
         }
-        return labels.get(command, "Waiting")
+        return labels.get(command, self.tr("Waiting", "等待中"))
 
     def control_mode_text(self, command):
         if command in ("vol_up", "vol_down"):
-            return "Volume Control", "#cba6f7"
+            return self.tr("Volume Control", "音量控制"), "#cba6f7"
         if command in ("seek_forward", "seek_back"):
-            return "Seek Control", "#74c7ec"
+            return self.tr("Seek Control", "快进快退控制"), "#74c7ec"
         if command in ("play", "pause", "toggle"):
-            return "Playback Control", "#89b4fa"
-        return "Waiting", "#f9e2af"
+            return self.tr("Playback Control", "播放控制"), "#89b4fa"
+        return self.tr("Waiting", "等待中"), "#f9e2af"
 
     def open_video_from_display(self, event):
         if event.button() == Qt.LeftButton:
@@ -515,13 +662,13 @@ class MainWindow(QMainWindow):
         try:
             self.video_thread.start_capture()
             self.camera_active = True
-            self.camera_toggle_btn.setText("Turn Off Camera")
-            self.cam_status.setText("Running")
+            self.camera_toggle_btn.setText(self.tr("Turn Off Camera", "关闭摄像头"))
+            self.cam_status.setText(self.tr("Running", "运行中"))
             self.cam_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
         except Exception as e:
-            self.cam_status.setText("Failed to Start")
+            self.cam_status.setText(self.tr("Failed to Start", "启动失败"))
             self.cam_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
-            QMessageBox.critical(self, "Error", f"Cannot auto-start camera: {str(e)}")
+            QMessageBox.critical(self, self.tr("Error", "错误"), f"{self.tr('Cannot auto-start camera', '无法自动启动摄像头')}: {str(e)}")
             
     def toggle_camera(self):
         if self.camera_active:
@@ -533,34 +680,34 @@ class MainWindow(QMainWindow):
         try:
             self.video_thread.start_capture()
             self.camera_active = True
-            self.camera_toggle_btn.setText("Turn Off Camera")
-            self.cam_status.setText("Running")
+            self.camera_toggle_btn.setText(self.tr("Turn Off Camera", "关闭摄像头"))
+            self.cam_status.setText(self.tr("Running", "运行中"))
             self.cam_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
             # When camera starts, also update detection status if detection is enabled
             if self.detect_checkbox.isChecked():
-                self.detect_status.setText("Detecting")
+                self.detect_status.setText(self.tr("Detecting", "检测中"))
                 self.detect_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
         except Exception as e:
-            self.cam_status.setText("Failed to Start")
+            self.cam_status.setText(self.tr("Failed to Start", "启动失败"))
             self.cam_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
-            QMessageBox.critical(self, "Error", f"Cannot start camera: {str(e)}")
+            QMessageBox.critical(self, self.tr("Error", "错误"), f"{self.tr('Cannot start camera', '无法启动摄像头')}: {str(e)}")
             
     def stop_camera(self):
         self.video_thread.stop_capture()
         self.camera_active = False
-        self.camera_toggle_btn.setText("Start Camera")
-        self.cam_status.setText("Stopped")
+        self.camera_toggle_btn.setText(self.tr("Start Camera", "启动摄像头"))
+        self.cam_status.setText(self.tr("Stopped", "已停止"))
         self.cam_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
-        self.camera_display.setText("Camera Stopped")
+        self.camera_display.setText(self.tr("Camera Stopped", "摄像头已关闭"))
         self.camera_display.setPixmap(QPixmap())
         # When camera stops, update detection status
-        self.detect_status.setText("Camera Off")
+        self.detect_status.setText(self.tr("Camera Off", "摄像头已关闭"))
         self.detect_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
         
         # Also stop video playback when camera is turned off
         if self.video_loaded:
             self.video_player_thread.stop()
-            self.video_status.setText("Stopped")
+            self.video_status.setText(self.tr("Stopped", "已停止"))
             self.video_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
             self.progress_slider.setValue(0)
             if hasattr(self, 'video_duration'):
@@ -572,10 +719,10 @@ class MainWindow(QMainWindow):
         is_detecting = state == Qt.CheckState.Checked.value
         self.video_thread.toggle_detection(is_detecting)
         if is_detecting:
-            self.detect_status.setText("Detecting")
+            self.detect_status.setText(self.tr("Detecting", "检测中"))
             self.detect_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
         else:
-            self.detect_status.setText("Disabled")
+            self.detect_status.setText(self.tr("Disabled", "已禁用"))
             self.detect_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
         
     def toggle_landmarks(self, state):
@@ -591,7 +738,7 @@ class MainWindow(QMainWindow):
             default_dir = os.getcwd()
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Video File", default_dir, "Video Files (*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.MP4 *.AVI *.MOV *.MKV *.FLV *.WMV)")
+            self, self.tr("Select Video File", "选择视频文件"), default_dir, "Video Files (*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.MP4 *.AVI *.MOV *.MKV *.FLV *.WMV)")
         
         if file_path:
             self.current_video_file = file_path
@@ -602,7 +749,7 @@ class MainWindow(QMainWindow):
             
             if self.video_player_thread.load_video(file_path):
                 self.video_loaded = True
-                self.video_status.setText("Loaded")
+                self.video_status.setText(self.tr("Loaded", "已加载"))
                 self.video_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
                 # Display first frame
                 cap = cv2.VideoCapture(file_path)
@@ -618,9 +765,9 @@ class MainWindow(QMainWindow):
                     self.update_time_label(0, self.video_duration)
             else:
                 self.video_loaded = False
-                self.video_status.setText("Load Failed")
+                self.video_status.setText(self.tr("Load Failed", "加载失败"))
                 self.video_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
-                QMessageBox.warning(self, "Failure", f"Cannot load video: {os.path.basename(file_path)}")
+                QMessageBox.warning(self, self.tr("Failure", "失败"), f"{self.tr('Cannot load video', '无法加载视频')}: {os.path.basename(file_path)}")
                 
     def update_video_info(self, video_info):
         """Update video information display"""
@@ -655,13 +802,13 @@ class MainWindow(QMainWindow):
                 if should_pause:
                     self.pause_video()
                     if self.is_in_fullscreen_mode and self.fullscreen_player:
-                        self.fullscreen_player.play_pause_btn.setText("Play")
-                        self.fullscreen_player.show_overlays(playback_text="Paused")
+                        self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
+                        self.fullscreen_player.show_overlays(playback_text=self.tr("Paused", "已暂停"))
                 else:
                     self.play_video()
                     if self.is_in_fullscreen_mode and self.fullscreen_player:
-                        self.fullscreen_player.play_pause_btn.setText("Pause")
-                        self.fullscreen_player.show_overlays(playback_text="Playing")
+                        self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
+                        self.fullscreen_player.show_overlays(playback_text=self.tr("Playing", "播放中"))
             return
         # 快进/快退（默认 5 秒）
         if command in ("seek_forward", "seek_back") and self.video_loaded:
@@ -676,7 +823,6 @@ class MainWindow(QMainWindow):
                 position = self.video_player_thread.get_position()
                 self.progress_slider.setValue(int(position * 1000))
                 self.update_time_label(position * self.video_duration, self.video_duration)
-                self.statusBar().showMessage(f"Seek to {int(new_pos)}s")
             except Exception as e:
                 error(f"seek error (prep): {e}")
             return
@@ -687,7 +833,6 @@ class MainWindow(QMainWindow):
                 import subprocess
                 subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', step],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.statusBar().showMessage("Volume adjusted")
             except Exception as e:
                 error(f"volume error: {e}")
             return
@@ -695,19 +840,25 @@ class MainWindow(QMainWindow):
     def play_video(self):
         if self.video_loaded:
             self.video_player_thread.play()
-            self.video_status.setText("Playing")
+            self.video_status.setText(self.tr("Playing", "播放中"))
             self.video_status.setStyleSheet("background-color: #89b4fa; color: #000000;")
+            # Update fullscreen player button if in fullscreen mode
+            if self.is_in_fullscreen_mode and self.fullscreen_player:
+                self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
                 
     def pause_video(self):
         if self.video_loaded:
             self.video_player_thread.pause()
-            self.video_status.setText("Paused")
+            self.video_status.setText(self.tr("Paused", "已暂停"))
             self.video_status.setStyleSheet("background-color: #f9e2af; color: #000000;")
+            # Update fullscreen player button if in fullscreen mode
+            if self.is_in_fullscreen_mode and self.fullscreen_player:
+                self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
             
     def stop_video(self):
         if self.video_loaded:
             self.video_player_thread.stop()
-            self.video_status.setText("Stopped")
+            self.video_status.setText(self.tr("Stopped", "已停止"))
             self.video_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
             self.progress_slider.setValue(0)
             self.update_time_label(0, self.video_duration)
@@ -736,7 +887,34 @@ class MainWindow(QMainWindow):
         
     def display_video_frame(self, frame):
         """Display video frame"""
+        if frame is not None:
+            self.latest_video_frame = frame.copy()
         self.display_frame(self.video_display, frame)
+
+    def sync_fullscreen_video_frame(self):
+        """Show the currently available video frame in fullscreen immediately."""
+        if not self.fullscreen_player:
+            return
+
+        if self.latest_video_frame is not None:
+            self.fullscreen_player.update_video_frame(self.latest_video_frame)
+            return
+
+        if not self.current_video_file or not os.path.exists(self.current_video_file):
+            return
+
+        cap = cv2.VideoCapture(self.current_video_file)
+        try:
+            if cap.isOpened():
+                if self.video_player_thread.total_frames > 0:
+                    current_frame = int(self.video_player_thread.get_position() * self.video_player_thread.total_frames)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+                ret, frame = cap.read()
+                if ret:
+                    self.latest_video_frame = frame.copy()
+                    self.fullscreen_player.update_video_frame(frame)
+        finally:
+            cap.release()
 
     def update_detection_status(self, detection_result):
         """Update detection status (hand & gesture)"""
@@ -749,27 +927,27 @@ class MainWindow(QMainWindow):
                 return
 
             if self.camera_active and self.detect_checkbox.isChecked():
-                self._set_badge(self.detect_status, "Waiting", "#f9e2af")
-            self._set_badge(self.gesture_mode_status, "Inactive", "#585b70", "#ffffff")
-            self._set_badge(self.gesture_action_status, "Waiting", "#585b70", "#ffffff")
+                self._set_badge(self.detect_status, self.tr("Waiting", "等待中"), "#f9e2af")
+            self._set_badge(self.gesture_mode_status, self.tr("Inactive", "未激活"), "#585b70", "#ffffff")
+            self._set_badge(self.gesture_action_status, self.tr("Waiting", "等待中"), "#585b70", "#ffffff")
             return
 
         hand_present = detection_result.get('hand_present', False)
         command = detection_result.get('cmd', None)
 
         if not hand_present:
-            self._set_badge(self.detect_status, "No Hand", "#f38ba8")
+            self._set_badge(self.detect_status, self.tr("No Hand", "未检测到手"), "#f38ba8")
             if self.last_control_command and now_ms < self.last_gesture_display_until_ms:
                 mode_text, mode_color = self.control_mode_text(self.last_control_command)
                 self._set_badge(self.gesture_mode_status, mode_text, mode_color)
                 self._set_badge(self.gesture_action_status, self.command_display_text(self.last_control_command), "#a6e3a1")
                 return
 
-            self._set_badge(self.gesture_mode_status, "Inactive", "#585b70", "#ffffff")
-            self._set_badge(self.gesture_action_status, "Waiting", "#585b70", "#ffffff")
+            self._set_badge(self.gesture_mode_status, self.tr("Inactive", "未激活"), "#585b70", "#ffffff")
+            self._set_badge(self.gesture_action_status, self.tr("Waiting", "等待中"), "#585b70", "#ffffff")
             return
 
-        self._set_badge(self.detect_status, "Gesture Active", "#a6e3a1")
+        self._set_badge(self.detect_status, self.tr("Gesture Active", "手势激活"), "#a6e3a1")
         if command:
             if now_ms < self.gesture_command_locked_until_ms:
                 if self.last_control_command and now_ms < self.last_gesture_display_until_ms:
@@ -789,9 +967,9 @@ class MainWindow(QMainWindow):
                 self._set_badge(self.gesture_mode_status, mode_text, mode_color)
                 self._set_badge(self.gesture_action_status, self.command_display_text(self.last_control_command), "#a6e3a1")
             else:
-                neutral_text = "Done, Waiting" if self.last_control_command else "Waiting"
+                neutral_text = self.tr("Done, Waiting", "完成，等待中") if self.last_control_command else self.tr("Waiting", "等待中")
                 self._set_badge(self.gesture_mode_status, neutral_text, "#f9e2af")
-                self._set_badge(self.gesture_action_status, "Waiting", "#f9e2af")
+                self._set_badge(self.gesture_action_status, self.tr("Waiting", "等待中"), "#f9e2af")
         
     def update_fps_display(self, fps):
         """Update FPS display"""
@@ -801,11 +979,17 @@ class MainWindow(QMainWindow):
         """Update progress bar"""
         if self.video_loaded and self.video_player_thread.playing and not self.video_player_thread.paused:
             position = self.video_player_thread.get_position()
-            self.progress_slider.setValue(int(position * 1000))
+            # Do not overwrite user drag position while slider is being dragged.
+            if not self.is_slider_pressed:
+                self.progress_slider.setValue(int(position * 1000))
             
             # Update time display
             current_time = position * self.video_duration
             self.update_time_label(current_time, self.video_duration)
+
+            # Keep fullscreen controls in sync with playback progress/time
+            if self.is_in_fullscreen_mode and self.fullscreen_player:
+                self.fullscreen_player.update_progress(position, self.video_duration)
         
     def update_time_label(self, current_time, total_time):
         """Update time display label"""
@@ -815,10 +999,12 @@ class MainWindow(QMainWindow):
         
     def on_progress_slider_moved(self, value):
         """Progress slider moved event"""
-        if self.video_loaded and not self.is_slider_pressed:
+        # Only handle explicit user drag; programmatic setValue should not trigger seek.
+        if self.video_loaded and self.is_slider_pressed:
             position = value / 1000.0
             target_frame = int(position * self.video_player_thread.total_frames)
             self.video_player_thread.seek(target_frame)  # Send signal, handled by playback thread
+            self.update_time_label(position * self.video_duration, self.video_duration)
             
     def on_progress_slider_pressed(self):
         """Progress slider pressed event"""
@@ -829,21 +1015,31 @@ class MainWindow(QMainWindow):
         if self.video_loaded:
             position = self.progress_slider.value() / 1000.0
             self.video_player_thread.seek(int(position * self.video_player_thread.total_frames))
+            self.update_time_label(position * self.video_duration, self.video_duration)
         self.is_slider_pressed = False
         
     def on_playback_finished(self):
         """Video playback finished event"""
-        self.video_status.setText("Playback Completed")
+        self.video_status.setText(self.tr("Playback Completed", "播放完成"))
         self.video_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
         self.progress_slider.setValue(1000)
         
         # Automatically find and play the next video file
-        self.play_next_video()
+        started = self.play_next_video()
+        if not started and self.current_video_file and os.path.exists(self.current_video_file):
+            if self.video_player_thread.load_video(self.current_video_file):
+                self.video_loaded = True
+                self.video_status.setText(self.tr("Auto Playing", "自动播放中"))
+                self.video_status.setStyleSheet("background-color: #89b4fa; color: #000000;")
+                self.video_player_thread.play()
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
+                    self.fullscreen_player.show_status(self.tr("Auto replaying current video", "自动重播当前视频"))
         
     def play_next_video(self):
         """Find and play the next video file"""
         if not self.current_video_file:
-            return
+            return False
             
         # Get the directory of the current video
         current_dir = os.path.dirname(self.current_video_file)
@@ -865,7 +1061,7 @@ class MainWindow(QMainWindow):
                     
             # If no video files are found, return
             if not video_files:
-                return
+                return False
                 
             # Sort the files
             video_files.sort()
@@ -886,8 +1082,7 @@ class MainWindow(QMainWindow):
             
             # Check if the file exists
             if not os.path.exists(next_video_path):
-                self.statusBar().showMessage(f"Next video file not found: {next_video}")
-                return
+                return False
             
             # Before loading a new video, make sure the current video resources have been released
             if self.video_player_thread:
@@ -901,44 +1096,46 @@ class MainWindow(QMainWindow):
             if self.video_player_thread.load_video(next_video_path):
                 self.current_video_file = next_video_path
                 self.video_loaded = True
-                self.video_status.setText("Auto Playing")
+                self.video_status.setText(self.tr("Auto Playing", "自动播放中"))
                 self.video_status.setStyleSheet("background-color: #89b4fa; color: #000000;")
                 
                 # Ensure the video player is in the correct state
                 self.video_player_thread.play()
                 
-                # Show message
-                self.statusBar().showMessage(f"Auto-playing next video: {next_video}")
-                
                 # If in fullscreen mode, update the fullscreen player as well
                 if self.is_in_fullscreen_mode and self.fullscreen_player:
-                    self.fullscreen_player.play_pause_btn.setText("Pause")
-                    self.fullscreen_player.show_status(f"Auto-playing: {next_video}")
+                    self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
+                    self.fullscreen_player.show_status(f"{self.tr('Auto-playing', '自动播放')}: {next_video}")
+                return True
             else:
                 self.video_loaded = False
-                self.video_status.setText("Auto Play Failed")
+                self.video_status.setText(self.tr("Auto Play Failed", "自动播放失败"))
                 self.video_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
-                self.statusBar().showMessage("Failed to auto-play next video")
+                return False
                 
         except Exception as e:
             error(f" Error finding next video: {e}")
-            self.statusBar().showMessage("Error occurred while finding next video")
+            return False
       
         
     def toggle_fullscreen(self):
         """Toggle fullscreen mode"""
         if self.is_fullscreen:
             self.showNormal()
-            self.fullscreen_btn.setText("Fullscreen")
+            self.fullscreen_btn.setText("Fullscreen" if self.current_language == "en" else "全屏")
             self.is_fullscreen = False
         else:
             self.showFullScreen()
-            self.fullscreen_btn.setText("Exit Fullscreen")
+            self.fullscreen_btn.setText("Exit Fullscreen" if self.current_language == "en" else "退出全屏")
             self.is_fullscreen = True
     def enter_fullscreen_play_mode(self):
         """Enter fullscreen play mode"""
         if not self.video_loaded:
-            QMessageBox.warning(self, "Notice", "Please select a video file first")
+            QMessageBox.warning(
+                self,
+                "Notice" if self.current_language == "en" else "提示",
+                "Please select a video file first" if self.current_language == "en" else "请先选择视频文件"
+            )
             return
             
         if self.fullscreen_player is None:
@@ -950,17 +1147,23 @@ class MainWindow(QMainWindow):
             
         # Set fullscreen play button text based on current playback status
         if self.video_player_thread.playing and not self.video_player_thread.paused:
-            self.fullscreen_player.play_pause_btn.setText("Pause")
+            self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
         else:
-            self.fullscreen_player.play_pause_btn.setText("Play")
+            self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
             
         # Hide main window, show fullscreen player
         self.hide()
         self.fullscreen_player.show()
         self.is_in_fullscreen_mode = True
+        self.sync_fullscreen_video_frame()
+        QTimer.singleShot(80, self.sync_fullscreen_video_frame)
+
+        # Initialize fullscreen progress/time immediately
+        position = self.video_player_thread.get_position() if self.video_loaded else 0.0
+        self.fullscreen_player.update_progress(position, self.video_duration)
         
         # Update status
-        self.fullscreen_player.show_status("Entered fullscreen play mode")
+        self.fullscreen_player.show_status(self.tr("Entered fullscreen play mode", "已进入全屏播放模式"))
         
     def closeEvent(self, event):
         """Window close event """ 
@@ -1035,6 +1238,7 @@ class MainWindow(QMainWindow):
             
             # 更新按钮尺寸
             self.fullscreen_btn.setFixedSize(max(90, int(new_width * 0.14)), 30)
+            self.language_btn.setFixedSize(max(90, int(new_width * 0.12)), 30)
             self.fullscreen_play_btn.setFixedSize(max(130, int(new_width * 0.22)), 30)
             self.video_play_btn.setFixedSize(max(58, int(new_width * 0.08)), 30)
             self.video_pause_btn.setFixedSize(max(58, int(new_width * 0.08)), 30)
