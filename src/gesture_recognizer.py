@@ -456,8 +456,8 @@ class MediaPipeGestureRecognizer:
            and horizontal_direction != 0:
             self._dx_gate_high = True
             self._last_motion_cmd_ms = now_ms
-            gesture = "swipe_right" if horizontal_direction > 0 else "swipe_left"
-            cmd = "seek_forward" if horizontal_direction > 0 else "seek_back"
+            gesture = "swipe_left" if horizontal_direction > 0 else "swipe_right"
+            cmd = "seek_back" if horizontal_direction > 0 else "seek_forward"
             return gesture, cmd
 
         # Open palm (play)

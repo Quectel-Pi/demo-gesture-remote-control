@@ -53,6 +53,7 @@ class VideoCaptureThread(QThread):
         self.proc_width = 640  # 将输入缩放到宽度 640（可调：480/640/960）
         self.detection_fps = 15  # 手势检测的目标频率（FPS）
         self._last_detect_time = 0.0  # time.time() 单位秒
+        self.mirror_preview = True  # 仅镜像预览画面，不影响手势识别方向
 
         self.frame_remain = 0
         self.command_remain = ''
@@ -218,18 +219,32 @@ class VideoCaptureThread(QThread):
         with self._lock:
             self.show_landmarks = show
 
+    def command_display_text(self, cmd):
+        labels = {
+            'play': 'Play',
+            'pause': 'Pause',
+            'toggle': 'Play/Pause',
+            'seek_forward': 'Seek +5s',
+            'seek_back': 'Seek -5s',
+            'vol_up': 'Volume +5%',
+            'vol_down': 'Volume -5%',
+        }
+        return labels.get(cmd, 'Waiting')
+
     def cmd_hud(self, cmd):
+        control_state = 'Engaged'
         gesture_cmd = cmd
         if cmd is None:
             if self.frame_remain >= 0:
                 self.frame_remain -= 1
                 gesture_cmd = self.command_remain
             else:
-                return None
+                control_state = 'Disengaged'
+                gesture_cmd = None
         else:
             self.frame_remain = 10
             self.command_remain = cmd
-        return gesture_cmd
+        return f"{control_state} | {self.command_display_text(gesture_cmd)}"
 
     def run(self):
         self._closed = False
@@ -394,13 +409,33 @@ class VideoCaptureThread(QThread):
                             except Exception as e:
                                 error(f"draw landmarks err: {e}")
 
+                    # 使用自拍镜像预览，避免用户感知左右反向。
+                    display_frame = cv2.flip(processed_frame, 1) if self.mirror_preview else processed_frame
+
                     remain_cmd = self.cmd_hud(command)
-                    if remain_cmd:
-                        cv2.putText(processed_frame, f"cmd: {remain_cmd}", (10, 28 + 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 200), 2)
+                    hud_text = f" {remain_cmd}"
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.8
+                    thickness = 2
+                    text_x, text_y = 10, 38
+                    (text_w, text_h), baseline = cv2.getTextSize(hud_text, font, font_scale, thickness)
+                    pad_x, pad_y = 8, 8
+                    box_x1 = max(0, text_x - pad_x)
+                    box_y1 = max(0, text_y - text_h - pad_y)
+                    box_x2 = min(display_frame.shape[1] - 1, text_x + text_w + pad_x)
+                    box_y2 = min(display_frame.shape[0] - 1, text_y + baseline + pad_y)
+
+                    # 灰色 + 50% 透明底色
+                    overlay = display_frame.copy()
+                    cv2.rectangle(overlay, (box_x1, box_y1), (box_x2, box_y2), (80, 80, 80), -1)
+                    cv2.addWeighted(overlay, 0.5, display_frame, 0.5, 0, display_frame)
+
+                    cv2.putText(display_frame, hud_text, (text_x, text_y),
+                        font, font_scale, (0, 200, 200), thickness)
+
                     # 将处理后的帧发回 UI（QLabel 显示等）
                     try:
-                        self.frame_ready.emit(processed_frame)
+                        self.frame_ready.emit(display_frame)
                     except Exception:
                         pass
 
