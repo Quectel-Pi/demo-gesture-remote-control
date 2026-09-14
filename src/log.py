@@ -20,11 +20,6 @@ logger.setLevel(LOG_LEVEL)
 # Create formatter
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Create console handler and set level to debug
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(LOG_LEVEL)
-console_handler.setFormatter(formatter)
-
 # Create file handler and set level to debug
 file_handler = logging.FileHandler(LOG_FILE)
 file_handler.setLevel(LOG_LEVEL)
@@ -32,8 +27,8 @@ file_handler.setFormatter(formatter)
 
 # Add handlers to logger
 if not logger.handlers:
-    logger.addHandler(console_handler)
     logger.addHandler(file_handler)
+    # logger.addHandler(console_handler)
 
 def debug(message):
     """Log debug message"""

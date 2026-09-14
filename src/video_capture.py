@@ -82,6 +82,41 @@ class VideoCaptureThread(QThread):
                             temp_cap.release()
                     except Exception:
                         pass
+        # UVC fallback scan: on RK3576 (Quectel Pi M2) rkisp/rkcif occupy
+        # /dev/video0-9 so a USB UVC camera can land on a high index (e.g. 73).
+        # Scan sysfs for uvcvideo nodes when the 0-9 probe finds nothing.
+        try:
+            import glob, os as _os
+            v4l_dirs = sorted(glob.glob('/sys/class/video4linux/video*'),
+                              key=lambda x: int(x.rsplit('video', 1)[1]))
+            for d in v4l_dirs:
+                try:
+                    drv = _os.path.realpath(_os.path.join(d, 'device', 'driver'))
+                    if 'uvcvideo' not in drv:
+                        continue
+                    idx = int(d.rsplit('video', 1)[1])
+                except Exception:
+                    continue
+                temp_cap = None
+                try:
+                    temp_cap = cv2.VideoCapture(idx)
+                    if temp_cap.isOpened():
+                        ret, frame = temp_cap.read()
+                        if ret and frame is not None:
+                            temp_cap.release()
+                            debug("Found UVC camera at device ID: %d" % idx)
+                            return idx
+                except Exception as e:
+                    error("Error checking camera %d: %s" % (idx, e))
+                finally:
+                    if temp_cap is not None:
+                        try:
+                            if temp_cap.isOpened():
+                                temp_cap.release()
+                        except Exception:
+                            pass
+        except Exception as e:
+            error("UVC scan failed: %s" % e)
         error("No available camera device found")
         return None
 
