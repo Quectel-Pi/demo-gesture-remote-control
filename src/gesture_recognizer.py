@@ -46,15 +46,15 @@ class MediaPipeGestureRecognizer:
         self.flow_thresh_ratio = 0.040
         self.flow_static_ratio = 0.010
         self.flow_static_ratio_open_palm = 0.025
-        self.swipe_consistent_min = 4
-        self.finger_swipe_consistent_min = 3
+        self.swipe_consistent_min = 3
+        self.finger_swipe_consistent_min = 2
         self.finger_swipe_threshold_scale = 0.75
 
-        self.ema_alpha = 0.25
+        self.ema_alpha = 0.35
         self.dy_ema = 0.0
         self.dx_ema = 0.0
-        self.vel_thresh_norm_vertical = 1.20
-        self.vel_thresh_norm_horizontal = 1.20
+        self.vel_thresh_norm_vertical = 1.10
+        self.vel_thresh_norm_horizontal = 1.10
         self._dy_gate_high = False
         self._dx_gate_high = False
         self.last_frame_ms = 0
@@ -70,8 +70,8 @@ class MediaPipeGestureRecognizer:
         # 下滑路径积分窗
         self.dy_hist_norm = deque(maxlen=24)
         self.dy_hist_t = deque(maxlen=24)
-        self.dy_path_window_ms = 250
-        self.down_path_thresh = 1.80
+        self.dy_path_window_ms = 180
+        self.down_path_thresh = 1.50
 
         # 张开手掌
         self.open_palm_min_spread_ratio = 1.10
