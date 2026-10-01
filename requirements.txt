@@ -3,4 +3,4 @@ opencv-python==4.8.1.78
 mediapipe==0.10.9
 protobuf==3.20.3
 PySide6==6.5.3
-moviepy==1.0.3
+av==16.0.1

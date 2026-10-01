@@ -34,7 +34,8 @@ class MainWindow(QMainWindow):
         self.is_slider_pressed = False
         self.last_control_command = None
         self.last_gesture_display_until_ms = 0
-        self.gesture_display_hold_ms = 500
+        self.gesture_display_hold_ms = 220
+        self.gesture_command_lock_ms = 120
         self.gesture_command_locked_until_ms = 0
         self.current_language = "en"
         
@@ -284,7 +285,7 @@ class MainWindow(QMainWindow):
         
         self.camera_display = QLabel("Starting camera...")
         self.camera_display.setAlignment(Qt.AlignCenter)
-        self.camera_display.setScaledContents(True)  # Stretch to fill, no black bars
+        self.camera_display.setScaledContents(True)
         # Use relative dimensions instead of fixed sizes
         self.camera_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.26))
         self.camera_display.setStyleSheet("""
@@ -307,7 +308,7 @@ class MainWindow(QMainWindow):
         
         self.video_display = QLabel("Click to select a video file")
         self.video_display.setAlignment(Qt.AlignCenter)
-        self.video_display.setScaledContents(True)  # Stretch to fill, no black bars
+        self.video_display.setScaledContents(True)
         # Use relative dimensions instead of fixed sizes
         self.video_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.26))
         self.video_display.setStyleSheet("""
@@ -746,8 +747,29 @@ class MainWindow(QMainWindow):
             # Stop any currently playing video
             if self.video_loaded:
                 self.video_player_thread.stop()
+                time.sleep(0.1)
+
+            try:
+                self.video_player_thread.frame_ready.disconnect(self.update_video_frame)
+                self.video_player_thread.playback_finished.disconnect(self.on_playback_finished)
+                self.video_player_thread.video_info_ready.disconnect(self.update_video_info)
+            except TypeError:
+                pass
+
+            old_thread = self.video_player_thread
+            self.video_player_thread = VideoPlayerThread()
+
+            self.video_player_thread.frame_ready.connect(self.update_video_frame)
+            self.video_player_thread.playback_finished.connect(self.on_playback_finished)
+            self.video_player_thread.video_info_ready.connect(self.update_video_info)
+
+            old_thread.shutdown()
+            if old_thread.isRunning():
+                old_thread.quit()
+                old_thread.wait(3000)
             
             if self.video_player_thread.load_video(file_path):
+                self.video_player_thread.start()
                 self.video_loaded = True
                 self.video_status.setText(self.tr("Loaded", "已加载"))
                 self.video_status.setStyleSheet("background-color: #a6e3a1; color: #000000;")
@@ -791,7 +813,7 @@ class MainWindow(QMainWindow):
 
         self.last_control_command = command
         self.last_gesture_display_until_ms = now_ms + self.gesture_display_hold_ms
-        self.gesture_command_locked_until_ms = self.last_gesture_display_until_ms
+        self.gesture_command_locked_until_ms = now_ms + self.gesture_command_lock_ms
 
         # 播放/暂停控制
         if command in ("play", "pause", "toggle"):
@@ -823,6 +845,8 @@ class MainWindow(QMainWindow):
                 position = self.video_player_thread.get_position()
                 self.progress_slider.setValue(int(position * 1000))
                 self.update_time_label(position * self.video_duration, self.video_duration)
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.update_progress(position, self.video_duration)
             except Exception as e:
                 error(f"seek error (prep): {e}")
             return
@@ -839,29 +863,42 @@ class MainWindow(QMainWindow):
 
     def play_video(self):
         if self.video_loaded:
-            self.video_player_thread.play()
-            self.video_status.setText(self.tr("Playing", "播放中"))
-            self.video_status.setStyleSheet("background-color: #89b4fa; color: #000000;")
-            # Update fullscreen player button if in fullscreen mode
-            if self.is_in_fullscreen_mode and self.fullscreen_player:
-                self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
+            try:
+                self.video_player_thread.play()
+                self.video_status.setText(self.tr("Playing", "播放中"))
+                self.video_status.setStyleSheet("background-color: #89b4fa; color: #000000;")
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
+            except RuntimeError as e:
+                error(f"Error playing video: {e}")
+                QMessageBox.warning(self, self.tr("Playback Error", "播放错误"), self.tr("Failed to start playback", "启动播放失败"))
                 
     def pause_video(self):
         if self.video_loaded:
-            self.video_player_thread.pause()
-            self.video_status.setText(self.tr("Paused", "已暂停"))
-            self.video_status.setStyleSheet("background-color: #f9e2af; color: #000000;")
-            # Update fullscreen player button if in fullscreen mode
-            if self.is_in_fullscreen_mode and self.fullscreen_player:
-                self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
+            try:
+                self.video_player_thread.pause()
+                self.video_status.setText(self.tr("Paused", "已暂停"))
+                self.video_status.setStyleSheet("background-color: #f9e2af; color: #000000;")
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
+            except RuntimeError as e:
+                error(f"Error pausing video: {e}")
+                QMessageBox.warning(self, self.tr("Playback Error", "播放错误"), self.tr("Failed to pause playback", "暂停播放失败"))
             
     def stop_video(self):
         if self.video_loaded:
-            self.video_player_thread.stop()
-            self.video_status.setText(self.tr("Stopped", "已停止"))
-            self.video_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
-            self.progress_slider.setValue(0)
-            self.update_time_label(0, self.video_duration)
+            try:
+                self.video_player_thread.stop()
+                self.video_status.setText(self.tr("Stopped", "已停止"))
+                self.video_status.setStyleSheet("background-color: #f38ba8; color: #000000;")
+                self.progress_slider.setValue(0)
+                self.update_time_label(0, self.video_duration)
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
+                    self.fullscreen_player.update_progress(0.0, self.video_duration)
+            except RuntimeError as e:
+                error(f"Error stopping video: {e}")
+                QMessageBox.warning(self, self.tr("Playback Error", "播放错误"), self.tr("Failed to stop playback", "停止播放失败"))
             
     def update_camera_frame(self, frame):
         self.display_frame(self.camera_display, frame)
@@ -871,24 +908,19 @@ class MainWindow(QMainWindow):
         
     def display_frame(self, label, frame):
         """Display frame to specified label"""
+        if frame is None:
+            return
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
         qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         pixmap = QPixmap.fromImage(qt_image)
-        
-        scaled_pixmap = pixmap.scaled(
-            label.size(), 
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        
-        label.setPixmap(scaled_pixmap)
+        label.setPixmap(pixmap)
         
     def display_video_frame(self, frame):
         """Display video frame"""
         if frame is not None:
-            self.latest_video_frame = frame.copy()
+            self.latest_video_frame = frame
         self.display_frame(self.video_display, frame)
 
     def sync_fullscreen_video_frame(self):
@@ -911,7 +943,7 @@ class MainWindow(QMainWindow):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
                 ret, frame = cap.read()
                 if ret:
-                    self.latest_video_frame = frame.copy()
+                    self.latest_video_frame = frame
                     self.fullscreen_player.update_video_frame(frame)
         finally:
             cap.release()
@@ -999,12 +1031,12 @@ class MainWindow(QMainWindow):
         
     def on_progress_slider_moved(self, value):
         """Progress slider moved event"""
-        # Only handle explicit user drag; programmatic setValue should not trigger seek.
         if self.video_loaded and self.is_slider_pressed:
             position = value / 1000.0
-            target_frame = int(position * self.video_player_thread.total_frames)
-            self.video_player_thread.seek(target_frame)  # Send signal, handled by playback thread
-            self.update_time_label(position * self.video_duration, self.video_duration)
+            current_time = position * self.video_duration
+            self.update_time_label(current_time, self.video_duration)
+            if self.is_in_fullscreen_mode and self.fullscreen_player:
+                self.fullscreen_player.update_progress(position, self.video_duration)
             
     def on_progress_slider_pressed(self):
         """Progress slider pressed event"""
@@ -1016,6 +1048,8 @@ class MainWindow(QMainWindow):
             position = self.progress_slider.value() / 1000.0
             self.video_player_thread.seek(int(position * self.video_player_thread.total_frames))
             self.update_time_label(position * self.video_duration, self.video_duration)
+            if self.is_in_fullscreen_mode and self.fullscreen_player:
+                self.fullscreen_player.update_progress(position, self.video_duration)
         self.is_slider_pressed = False
         
     def on_playback_finished(self):
@@ -1031,6 +1065,8 @@ class MainWindow(QMainWindow):
                 self.video_loaded = True
                 self.video_status.setText(self.tr("Auto Playing", "自动播放中"))
                 self.video_status.setStyleSheet("background-color: #89b4fa; color: #000000;")
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.update_progress(0.0, self.video_duration)
                 self.video_player_thread.play()
                 if self.is_in_fullscreen_mode and self.fullscreen_player:
                     self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
