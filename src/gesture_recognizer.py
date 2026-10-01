@@ -46,23 +46,24 @@ class MediaPipeGestureRecognizer:
         self.flow_thresh_ratio = 0.040
         self.flow_static_ratio = 0.010
         self.flow_static_ratio_open_palm = 0.025
+        # 适度提高门槛，减少轻微抖动 / 手势未稳定时误触发
         self.swipe_consistent_min = 4
         self.finger_swipe_consistent_min = 3
-        self.finger_swipe_threshold_scale = 0.75
+        self.finger_swipe_threshold_scale = 0.82
 
-        self.ema_alpha = 0.25
+        self.ema_alpha = 0.35
         self.dy_ema = 0.0
         self.dx_ema = 0.0
-        self.vel_thresh_norm_vertical = 1.20
-        self.vel_thresh_norm_horizontal = 1.20
+        self.vel_thresh_norm_vertical = 1.40
+        self.vel_thresh_norm_horizontal = 1.40
         self._dy_gate_high = False
         self._dx_gate_high = False
         self.last_frame_ms = 0
 
         # 角度门
-        self.vertical_angle_gate_ratio_up = 2.2
-        self.vertical_angle_gate_ratio_down = 1.8
-        self.horizontal_angle_gate_ratio = 2.2
+        self.vertical_angle_gate_ratio_up = 2.8
+        self.vertical_angle_gate_ratio_down = 2.2
+        self.horizontal_angle_gate_ratio = 2.8
 
         # 下滑偏置
         self.down_bias = 0.90
@@ -70,8 +71,8 @@ class MediaPipeGestureRecognizer:
         # 下滑路径积分窗
         self.dy_hist_norm = deque(maxlen=24)
         self.dy_hist_t = deque(maxlen=24)
-        self.dy_path_window_ms = 250
-        self.down_path_thresh = 1.80
+        self.dy_path_window_ms = 180
+        self.down_path_thresh = 2.10
 
         # 张开手掌
         self.open_palm_min_spread_ratio = 1.10
@@ -107,7 +108,7 @@ class MediaPipeGestureRecognizer:
 
         # 节流（外部也可能有节流）
         self.last_cmd_ms = 0
-        self.cmd_throttle_ms = 180
+        self.cmd_throttle_ms = 260
 
         # FPS 统计
         self.frame_count = 0
