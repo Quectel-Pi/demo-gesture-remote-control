@@ -94,7 +94,7 @@ sudo apt install -y "${DEPS[@]}"
 sudo apt install -y libdouble-conversion3 libxcb-cursor0 || true
 
 echo "[3/4] Installing pyenv + Python $PY_VER (skip if already installed)..."
-if [ ! -d "$HOME/.pyenv" ]; then
+if [ ! -x "$HOME/.pyenv/bin/pyenv" ]; then
   git clone https://github.com/pyenv/pyenv.git "$HOME/.pyenv"
 else
   echo "pyenv already exists, skipping clone"

@@ -38,28 +38,47 @@ class VideoCaptureThread(QThread):
         self.last_fps_time = time.time()
         self.last_command = None
         self.last_command_time = 0.0
-        self.command_repeat_interval = 0.35
+        self.command_repeat_interval = 0.20
         self.command_repeat_intervals = {
-            'seek_forward': 0.45,
-            'seek_back': 0.45,
-            'play': 0.50,
-            'pause': 0.50,
-            'toggle': 0.50,
-            'vol_up': 0.45,
-            'vol_down': 0.45,
+            'seek_forward': 0.18,
+            'seek_back': 0.18,
+            'play': 0.26,
+            'pause': 0.26,
+            'toggle': 0.26,
+            'vol_up': 0.20,
+            'vol_down': 0.20,
         }
 
-        # Processing config: 限制处理分辨率 & 检测频率（可在 UI 配置）
-        self.proc_width = 640  # 将输入缩放到宽度 640（可调：480/640/960）
-        self.detection_fps = 15  # 手势检测的目标频率（FPS）
-        self._last_detect_time = 0.0  # time.time() 单位秒
-        self.mirror_preview = True  # 仅镜像预览画面，不影响手势识别方向
+        # Processing config: limit processing resolution and detection rate (UI configurable)
+        self.proc_width = 480  # Scale input to 480px wide (adjustable: 480/640/960)
+        self.detection_fps = 15  # Target gesture detection rate (FPS)
+        self._last_detect_time = 0.0  # time.time() timestamp in seconds
+        self.mirror_preview = True  # Mirror preview only; gesture recognition direction is unchanged
+        self.preview_emit_fps = 12  # Upper bound for UI preview refresh rate to reduce main-thread rendering pressure
+        self.status_emit_fps = 10  # Upper bound for detection status emission to avoid signal storms
+        self._last_preview_emit_time = 0.0
+        self._last_status_emit_time = 0.0
+        self.landmarks_hold_sec = 0.20  # Briefly reuse landmarks to avoid visual flicker
+        self._last_landmarks_res = None
+        self._last_landmarks_time = 0.0
+
+        # Short status hold to avoid UI jitter when non-detection frames return empty
+        self.status_hold_sec = 0.18
+        self._last_nonempty_status = {}
+        self._last_nonempty_status_time = 0.0
+
+        # Lightweight adaptive preview FPS: keep detection at 15 FPS and tune preview within [min, max] based on load
+        self.adaptive_preview_fps = True
+        self.preview_emit_fps_min = 10
+        self.preview_emit_fps_max = 14
+        self._loop_ema_ms = 0.0
+        self._last_preview_tune_time = 0.0
 
         self.frame_remain = 0
         self.command_remain = ''
 
     def find_available_camera(self):
-        """自动检测可用摄像头设备，返回设备 id 或 None。"""
+        """Auto-detect an available camera device and return its id or None."""
         debug("Searching for available camera devices...")
         for i in range(10):
             temp_cap = None
@@ -122,8 +141,8 @@ class VideoCaptureThread(QThread):
 
     def start_capture(self, camera_id=None):
         """
-        打开摄像头并启动抓帧线程。
-        如果 camera_id 为 None，则会自动查找可用摄像头。
+        Open the camera and start the capture thread.
+        If camera_id is None, an available camera will be searched automatically.
         """
         if camera_id is None:
             camera_id = self.find_available_camera()
@@ -150,13 +169,21 @@ class VideoCaptureThread(QThread):
             self.fps = 0
             self.last_fps_time = time.time()
             self._last_detect_time = 0.0
+            self._last_preview_emit_time = 0.0
+            self._last_status_emit_time = 0.0
+            self._last_landmarks_res = None
+            self._last_landmarks_time = 0.0
+            self._last_nonempty_status = {}
+            self._last_nonempty_status_time = 0.0
+            self._loop_ema_ms = 0.0
+            self._last_preview_tune_time = 0.0
 
-        # 启动线程（如果尚未运行）
+        # Start the thread if it is not already running
         try:
             if not self.isRunning():
                 self.start()
         except RuntimeError:
-            # 如果线程无法启动（例如已结束），记录错误
+            # Log an error if the thread cannot be started (for example, after it has already ended)
             error("Failed to start capture thread")
 
     def _open_capture(self, camera_id):
@@ -170,9 +197,10 @@ class VideoCaptureThread(QThread):
             return False
 
         try:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FPS, 24)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
 
@@ -203,14 +231,14 @@ class VideoCaptureThread(QThread):
             self.exiting = True
             self.running = False
 
-        # 等待线程结束（最多 2 秒）
+        # Wait for the thread to finish (up to 2 seconds)
         try:
             if self.isRunning():
                 self.wait(2000)
         except Exception:
             pass
 
-        # 释放资源
+        # Release resources
         self._safe_release_capture()
 
     def _safe_release_capture(self):
@@ -232,7 +260,7 @@ class VideoCaptureThread(QThread):
         except Exception as e:
             error(f"Error in _safe_release_capture: {e}")
         finally:
-            # 确保释放 MediaPipe 资源
+            # Ensure MediaPipe resources are released
             try:
                 if self.gesture is not None:
                     try:
@@ -309,6 +337,7 @@ class VideoCaptureThread(QThread):
                     continue
 
                 try:
+                    loop_start = time.time()
                     ret, frame = False, None
                     cap_valid = False
                     with self._lock:
@@ -331,7 +360,7 @@ class VideoCaptureThread(QThread):
                         continue
                     read_failures = 0
 
-                    # 可选：按比例缩放以减少后续计算量（保持纵横比）
+                    # Optional: resize proportionally to reduce downstream processing cost while preserving aspect ratio
                     h, w = frame.shape[:2]
                     if w > self.proc_width:
                         scale = self.proc_width / float(w)
@@ -339,7 +368,7 @@ class VideoCaptureThread(QThread):
                         try:
                             frame = cv2.resize(frame, (self.proc_width, new_h), interpolation=cv2.INTER_LINEAR)
                         except Exception:
-                            # 如果缩放失败，使用原始帧
+                            # Fall back to the original frame if resizing fails
                             pass
 
                     # Update and emit FPS occasionally
@@ -358,9 +387,9 @@ class VideoCaptureThread(QThread):
                             except Exception:
                                 pass
 
-                    processed_frame = frame.copy()
+                    processed_frame = frame
 
-                    # 如果检测被启用，则按 detection_fps 做节流
+                    # Throttle detection to detection_fps when detection is enabled
                     run_detection = False
                     with self._lock:
                         detecting_enabled = self.detecting
@@ -375,14 +404,10 @@ class VideoCaptureThread(QThread):
                     command = None
                     if run_detection:
                         try:
-                            # 支持两种 process_frame 签名：
-                            # - 返回 detection_result dict（旧签名）
-                            # - 返回 (detection_result, res) tuple（新签名，res 用于绘制）
                             result = None
                             try:
                                 result = self.gesture.process_frame(processed_frame)
                             except TypeError:
-                                # 如果手势处理函数需要不同的参数或抛错，捕获并将 result 设为 None
                                 result = None
 
                             if isinstance(result, tuple) and len(result) >= 1:
@@ -393,10 +418,25 @@ class VideoCaptureThread(QThread):
                             else:
                                 detection_result = {}
 
-                            try:
-                                self.detection_status.emit(detection_result or {})
-                            except Exception:
-                                pass
+                            now_status = time.time()
+                            if detection_result:
+                                self._last_nonempty_status = detection_result
+                                self._last_nonempty_status_time = now_status
+                            if res is not None:
+                                self._last_landmarks_res = res
+                                self._last_landmarks_time = now_status
+
+                            now_emit = time.time()
+                            if (now_emit - self._last_status_emit_time) >= (1.0 / max(1.0, self.status_emit_fps)):
+                                status_to_emit = detection_result or {}
+                                if not status_to_emit:
+                                    if (now_emit - self._last_nonempty_status_time) <= self.status_hold_sec:
+                                        status_to_emit = self._last_nonempty_status
+                                try:
+                                    self.detection_status.emit(status_to_emit)
+                                except Exception:
+                                    pass
+                                self._last_status_emit_time = now_emit
 
                             command = detection_result.get('cmd', None)
                             now_cmd_time = time.time()
@@ -417,71 +457,97 @@ class VideoCaptureThread(QThread):
                                     self.last_command = command
                                     self.last_command_time = now_cmd_time
                             elif not command:
-                                # 无命令时清空，避免后续同类手势被长期吞掉
+                                # Clear on no command to avoid suppressing later gestures of the same type
                                 with self._lock:
                                     self.last_command = None
                         except Exception as e:
                             error(f"Gesture detection error: {e}")
+                            now_emit = time.time()
+                            if (now_emit - self._last_status_emit_time) >= (1.0 / max(1.0, self.status_emit_fps)):
+                                status_to_emit = {}
+                                if (now_emit - self._last_nonempty_status_time) <= self.status_hold_sec:
+                                    status_to_emit = self._last_nonempty_status
+                                try:
+                                    self.detection_status.emit(status_to_emit)
+                                except Exception:
+                                    pass
+                                self._last_status_emit_time = now_emit
+                    else:
+                        now_emit = time.time()
+                        if (now_emit - self._last_status_emit_time) >= (1.0 / max(1.0, self.status_emit_fps)):
+                            status_to_emit = {}
+                            if (now_emit - self._last_nonempty_status_time) <= self.status_hold_sec:
+                                status_to_emit = self._last_nonempty_status
                             try:
-                                self.detection_status.emit({})
+                                self.detection_status.emit(status_to_emit)
                             except Exception:
                                 pass
-                    else:
-                        # 不做检测时仍发出空状态，保证 UI 能收到 frame
+                            self._last_status_emit_time = now_emit
+
+                    now_preview = time.time()
+                    should_emit_preview = (now_preview - self._last_preview_emit_time) >= (1.0 / max(1.0, self.preview_emit_fps))
+                    if should_emit_preview:
+                        # Draw the latest landmarks when emitting preview frames to reduce flicker and control cost
+                        show_landmarks = False
+                        with self._lock:
+                            show_landmarks = self.show_landmarks
+                        if show_landmarks:
+                            if self._last_landmarks_res is not None and (now_preview - self._last_landmarks_time) <= self.landmarks_hold_sec:
+                                try:
+                                    self.gesture.draw_landmarks(processed_frame, self._last_landmarks_res)
+                                except Exception as e:
+                                    error(f"draw landmarks err: {e}")
+
+                        # Use mirrored preview so the user does not perceive left/right reversal.
+                        display_frame = cv2.flip(processed_frame, 1) if self.mirror_preview else processed_frame
+
+                        remain_cmd = self.cmd_hud(command)
+                        hud_text = f" {remain_cmd}"
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 0.8
+                        thickness = 2
+                        text_x, text_y = 10, 38
+                        (text_w, text_h), baseline = cv2.getTextSize(hud_text, font, font_scale, thickness)
+                        pad_x, pad_y = 8, 8
+                        box_x1 = max(0, text_x - pad_x)
+                        box_y1 = max(0, text_y - text_h - pad_y)
+                        box_x2 = min(display_frame.shape[1] - 1, text_x + text_w + pad_x)
+                        box_y2 = min(display_frame.shape[0] - 1, text_y + baseline + pad_y)
+
+                        cv2.rectangle(display_frame, (box_x1, box_y1), (box_x2, box_y2), (60, 60, 60), -1)
+                        cv2.putText(display_frame, hud_text, (text_x, text_y),
+                            font, font_scale, (0, 200, 200), thickness)
                         try:
-                            self.detection_status.emit({})
+                            self.frame_ready.emit(display_frame)
                         except Exception:
                             pass
+                        self._last_preview_emit_time = now_preview
 
-                    # 绘制 landmarks：不要每帧创建新的 mp.solutions.hands.Hands()
-                    show_landmarks = False
-                    with self._lock:
-                        show_landmarks = self.show_landmarks
-                    if show_landmarks:
-                        if res is not None:
-                            try:
-                                self.gesture.draw_landmarks(processed_frame, res)
-                            except Exception as e:
-                                error(f"draw landmarks err: {e}")
+                    # Estimate capture-loop load and fine-tune preview FPS (at most 1 FPS adjustment per second)
+                    loop_ms = (time.time() - loop_start) * 1000.0
+                    if self._loop_ema_ms <= 0.0:
+                        self._loop_ema_ms = loop_ms
+                    else:
+                        self._loop_ema_ms = self._loop_ema_ms * 0.9 + loop_ms * 0.1
 
-                    # 使用自拍镜像预览，避免用户感知左右反向。
-                    display_frame = cv2.flip(processed_frame, 1) if self.mirror_preview else processed_frame
+                    if self.adaptive_preview_fps:
+                        now_tune = time.time()
+                        if (now_tune - self._last_preview_tune_time) >= 1.0:
+                            # Empirical thresholds: >36 ms means load is high; <24 ms means there is headroom
+                            if self._loop_ema_ms > 36.0 and self.preview_emit_fps > self.preview_emit_fps_min:
+                                self.preview_emit_fps -= 1
+                            elif self._loop_ema_ms < 24.0 and self.preview_emit_fps < self.preview_emit_fps_max:
+                                self.preview_emit_fps += 1
+                            self._last_preview_tune_time = now_tune
 
-                    remain_cmd = self.cmd_hud(command)
-                    hud_text = f" {remain_cmd}"
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.8
-                    thickness = 2
-                    text_x, text_y = 10, 38
-                    (text_w, text_h), baseline = cv2.getTextSize(hud_text, font, font_scale, thickness)
-                    pad_x, pad_y = 8, 8
-                    box_x1 = max(0, text_x - pad_x)
-                    box_y1 = max(0, text_y - text_h - pad_y)
-                    box_x2 = min(display_frame.shape[1] - 1, text_x + text_w + pad_x)
-                    box_y2 = min(display_frame.shape[0] - 1, text_y + baseline + pad_y)
-
-                    # 灰色 + 50% 透明底色
-                    overlay = display_frame.copy()
-                    cv2.rectangle(overlay, (box_x1, box_y1), (box_x2, box_y2), (80, 80, 80), -1)
-                    cv2.addWeighted(overlay, 0.5, display_frame, 0.5, 0, display_frame)
-
-                    cv2.putText(display_frame, hud_text, (text_x, text_y),
-                        font, font_scale, (0, 200, 200), thickness)
-
-                    # 将处理后的帧发回 UI（QLabel 显示等）
-                    try:
-                        self.frame_ready.emit(display_frame)
-                    except Exception:
-                        pass
-
-                    # 稍微睡眠以让出 CPU（避免 tight loop）
+                    # Sleep briefly to yield CPU time and avoid a tight loop
                     time.sleep(0.001)
                 except Exception as e:
                     error(f"Error in camera capture loop: {e}")
-                    # 在出现严重错误时退出循环，以便释放资源
+                    # Exit the loop on serious errors so resources can be released
                     break
         finally:
-            # 线程退出时确保资源释放
+            # Ensure resources are released when the thread exits
             self._safe_release_capture()
             try:
                 self.finished.emit()
@@ -489,7 +555,7 @@ class VideoCaptureThread(QThread):
                 pass
 
     def __del__(self):
-        # 确保释放
+        # Ensure release
         try:
             self.stop_capture()
         except Exception:

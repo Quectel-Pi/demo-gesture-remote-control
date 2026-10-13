@@ -36,6 +36,7 @@ class FullScreenPlayer(QWidget):
         # Video display area
         self.video_label = QLabel(self.tr("Loading video...", "正在加载视频..."))
         self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setScaledContents(True)
         self.video_label.setStyleSheet("""
             QLabel {
                 background-color: #000000;
