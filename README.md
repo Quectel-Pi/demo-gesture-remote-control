@@ -81,38 +81,6 @@ If an error occurs while running `./install.sh`, or the terminal does not show `
 python3 --version
 ```
 
-#### Run the program
-
-Run the `main.py` startup script in the `src` directory. If the program starts successfully, a camera preview window will open.
-
-```bash
-cd demo-gesture-remote-control/src/
-python3 main.py
-```
-![](docs/assets/main.png)
-
-### Enable Auto-start at Boot (Optional)
-
-This project provides `setup_autostart.sh` to configure a user-level systemd service.
-
-```bash
-cd gesture-remote-control/demo-gesture-remote-control/
-./setup_autostart.sh install
-```
-
-Service management:
-
-```bash
-./setup_autostart.sh status
-./setup_autostart.sh uninstall
-```
-
-Logs:
-
-```bash
-journalctl --user -u gesture-remote-control -f
-```
-
 ## Project Structure
 
 ```
@@ -134,6 +102,16 @@ gesture-remote-control/
 ├── setup_autostart.sh          # Auto-start setup script
 └── requirements.txt            # Dependency list
 ```
+
+## Run the program
+
+Run the `main.py` startup script in the `src` directory. If the program starts successfully, a camera preview window will open.
+
+```bash
+cd demo-gesture-remote-control/src/
+python3 main.py
+```
+![](docs/assets/main.png)
 
 ## Reporting Issues
 If you encounter any issues during use, please submit technical inquiries on the [Quectel Official Forum](https://forumschinese.quectel.com/c/quectel-pi/58). Our technical support team will respond promptly.

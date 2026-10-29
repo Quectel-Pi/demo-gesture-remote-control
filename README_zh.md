@@ -81,39 +81,6 @@ sudo chmod 755 install.sh
 python3 --version
 ```
 
-#### 运行程序
-
-在`src`路径下执行`main.py`启动脚本；若程序正常启动，会打开摄像头画面窗口。
-
-```bash
-cd demo-gesture-remote-control/src/
-python3 main.py
-```
-
-![界面预览](docs/assets/main.png)
-
-### 配置开机自启动（可选）
-
-项目提供 `setup_autostart.sh`，用于配置用户级 systemd 自启动服务。
-
-```bash
-cd gesture-remote-control/demo-gesture-remote-control/
-./setup_autostart.sh install
-```
-
-服务管理命令：
-
-```bash
-./setup_autostart.sh status
-./setup_autostart.sh uninstall
-```
-
-查看日志：
-
-```bash
-journalctl --user -u gesture-remote-control -f
-```
-
 ## 项目结构
 
 ```
@@ -141,11 +108,10 @@ gesture-remote-control/
 在src路径下执行`main.py`程序启动脚本。
 
 ```bash
-cd gesture-remote-control/demo-gesture-remote-control/src/
+cd demo-gesture-remote-control/src/
 python3 main.py
-
 ```
-![界面预览](docs/assets/main.png)
+![](docs/assets/main.png)
 
 ## 报告问题
 如在使用过程中遇到问题，欢迎在[移远官方论坛](https://forumschinese.quectel.com/c/quectel-pi/58) 提交技术咨询，我们的技术支持团队将及时为您解答。
