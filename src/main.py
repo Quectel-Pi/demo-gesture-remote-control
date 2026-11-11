@@ -309,6 +309,7 @@ class MainWindow(QMainWindow):
         self.video_display = QLabel("Click to select a video file")
         self.video_display.setAlignment(Qt.AlignCenter)
         self.video_display.setScaledContents(True)
+        self.video_display.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         # Use relative dimensions instead of fixed sizes
         self.video_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.26))
         self.video_display.setStyleSheet("""

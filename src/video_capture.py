@@ -197,8 +197,8 @@ class VideoCaptureThread(QThread):
             return False
 
         try:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
             cap.set(cv2.CAP_PROP_FPS, 24)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:

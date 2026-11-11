@@ -17,12 +17,19 @@ try:
 except ImportError as e:
     raise RuntimeError("Please install mediapipe: pip install mediapipe") from e
 
+from npu_hands import create_hands as create_npu_hands
+
 
 class MediaPipeGestureRecognizer:
     def __init__(self):
         # MediaPipe Hands（只初始化一次，避免频繁创建导致内存/资源问题）
+        # RK 平台优先使用 NPU（npu_hands.RKNNHands，接口与 mp Hands 一致），不可用时回退 CPU
         self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
+        self.hands = create_npu_hands(
+            max_num_hands=2,
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.6
+        ) or self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
             min_detection_confidence=0.6,
