@@ -103,7 +103,7 @@ class MediaPipeGestureRecognizer:
         self.fist_armed = True
         self.fist_latched = False
         self.fist_release_frames = 3
-        self.pose_hold_ms = 60
+        self.pose_hold_ms = 20
         self.pose_release_frames = 3
         self._pose_states = {}
 
