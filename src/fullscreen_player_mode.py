@@ -312,6 +312,13 @@ class FullScreenPlayer(QWidget):
         
     def update_detection_status(self, detection_result):
         """Update detection status display"""
+        if detection_result and 'cooling' in detection_result:
+            command = detection_result.get('display_cmd')
+            self.show_overlays(
+                detection_text=self.parent_window.command_display_text(command),
+                playback_text=self.parent_window.control_mode_text(command)[0] if detection_result['cooling'] else self.tr("Waiting", "等待中"),
+            )
+            return
         gesture_cmd = None
         if detection_result:
             hand_present = detection_result.get('hand_present', False)

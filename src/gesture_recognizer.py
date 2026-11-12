@@ -17,12 +17,19 @@ try:
 except ImportError as e:
     raise RuntimeError("Please install mediapipe: pip install mediapipe") from e
 
+from npu_hands import create_hands as create_npu_hands
+
 
 class MediaPipeGestureRecognizer:
     def __init__(self):
         # MediaPipe Hands（只初始化一次，避免频繁创建导致内存/资源问题）
+        # RK 平台优先使用 NPU（npu_hands.RKNNHands，接口与 mp Hands 一致），不可用时回退 CPU
         self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
+        self.hands = create_npu_hands(
+            max_num_hands=2,
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.6
+        ) or self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
             min_detection_confidence=0.6,
@@ -61,9 +68,9 @@ class MediaPipeGestureRecognizer:
         self.last_frame_ms = 0
 
         # 角度门
-        self.vertical_angle_gate_ratio_up = 2.8
-        self.vertical_angle_gate_ratio_down = 2.2
-        self.horizontal_angle_gate_ratio = 2.8
+        self.vertical_angle_gate_ratio_up = 2.0
+        self.vertical_angle_gate_ratio_down = 2.0
+        self.horizontal_angle_gate_ratio = 2.2
 
         # 下滑偏置
         self.down_bias = 0.90
@@ -109,6 +116,9 @@ class MediaPipeGestureRecognizer:
         # 节流（外部也可能有节流）
         self.last_cmd_ms = 0
         self.cmd_throttle_ms = 260
+        self.action_cooldown_ms = 1000
+        self._action_cooldown_until = 0.0
+        self._last_action_command = None
 
         # FPS 统计
         self.frame_count = 0
@@ -512,11 +522,19 @@ class MediaPipeGestureRecognizer:
         return None, None
 
     # ----------------------------- process_frame & draw -----------------------------
+    def control_status(self):
+        cooling = time.monotonic() < self._action_cooldown_until
+        return {
+            'cooling': cooling,
+            'display_cmd': self._last_action_command if cooling else None,
+        }
+
     def process_frame(self, frame_bgr):
         """
         处理一帧 BGR 图像并返回 (detection_result, mp_result)
         - detection_result: dict
         - mp_result: mediapipe hands process 返回的结果（用于绘制）
+        - 指令触发后严格冷却 action_cooldown_ms，期间丢弃运动历史。
         """
         # 避免在每帧都新建 MediaPipe 实例，复用 self.hands
         detect_frame, gray = self._normalize_lighting(frame_bgr)
@@ -568,7 +586,24 @@ class MediaPipeGestureRecognizer:
 
             # 如果是新主手，清空光流历史与下滑积分
             # 通过检测 primary_lock_ms 实现短期锁定（在 _select_primary 中设置）
-            gesture, cmd = self._infer(pts, w, h, gray)
+            if time.monotonic() < self._action_cooldown_until:
+                # 冷却期间不积累回手轨迹，结束后从新动作开始识别。
+                self._reset_swipe_motion()
+                self.prev_gray = None
+                self.prev_points = None
+                self.flow_window_dx.clear()
+                self.flow_window_dy.clear()
+                self.dy_hist_norm.clear()
+                self.dy_hist_t.clear()
+                self.dx_ema = self.dy_ema = 0.0
+                self._dx_gate_high = self._dy_gate_high = False
+                self.last_frame_ms = 0
+                self._open_palm_start_ms = self._fist_start_ms = 0
+            else:
+                gesture, cmd = self._infer(pts, w, h, gray)
+                if cmd:
+                    self._last_action_command = cmd
+                    self._action_cooldown_until = time.monotonic() + self.action_cooldown_ms / 1000.0
 
             if tid is not None and tid in self.tracks:
                 self.tracks[tid]["armed"] = self.open_palm_armed

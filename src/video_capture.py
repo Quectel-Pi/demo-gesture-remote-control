@@ -74,8 +74,6 @@ class VideoCaptureThread(QThread):
         self._loop_ema_ms = 0.0
         self._last_preview_tune_time = 0.0
 
-        self.frame_remain = 0
-        self.command_remain = ''
 
     def find_available_camera(self):
         """Auto-detect an available camera device and return its id or None."""
@@ -197,8 +195,8 @@ class VideoCaptureThread(QThread):
             return False
 
         try:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
             cap.set(cv2.CAP_PROP_FPS, 24)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
@@ -294,20 +292,11 @@ class VideoCaptureThread(QThread):
         }
         return labels.get(cmd, 'Waiting')
 
-    def cmd_hud(self, cmd):
-        control_state = 'Engaged'
-        gesture_cmd = cmd
-        if cmd is None:
-            if self.frame_remain >= 0:
-                self.frame_remain -= 1
-                gesture_cmd = self.command_remain
-            else:
-                control_state = 'Disengaged'
-                gesture_cmd = None
-        else:
-            self.frame_remain = 10
-            self.command_remain = cmd
-        return f"{control_state} | {self.command_display_text(gesture_cmd)}"
+    def cmd_hud(self):
+        status = self.gesture.control_status()
+        if status['cooling']:
+            return f"Engaged | {self.command_display_text(status['display_cmd'])}"
+        return "Disengaged | Waiting"
 
     def run(self):
         self._closed = False
@@ -427,13 +416,13 @@ class VideoCaptureThread(QThread):
                                 self._last_landmarks_time = now_status
 
                             now_emit = time.time()
-                            if (now_emit - self._last_status_emit_time) >= (1.0 / max(1.0, self.status_emit_fps)):
+                            if detection_result.get('cmd') or (now_emit - self._last_status_emit_time) >= (1.0 / max(1.0, self.status_emit_fps)):
                                 status_to_emit = detection_result or {}
                                 if not status_to_emit:
                                     if (now_emit - self._last_nonempty_status_time) <= self.status_hold_sec:
                                         status_to_emit = self._last_nonempty_status
                                 try:
-                                    self.detection_status.emit(status_to_emit)
+                                    self.detection_status.emit(dict(status_to_emit, **self.gesture.control_status()))
                                 except Exception:
                                     pass
                                 self._last_status_emit_time = now_emit
@@ -468,7 +457,7 @@ class VideoCaptureThread(QThread):
                                 if (now_emit - self._last_nonempty_status_time) <= self.status_hold_sec:
                                     status_to_emit = self._last_nonempty_status
                                 try:
-                                    self.detection_status.emit(status_to_emit)
+                                    self.detection_status.emit(dict(status_to_emit, **self.gesture.control_status()))
                                 except Exception:
                                     pass
                                 self._last_status_emit_time = now_emit
@@ -479,7 +468,7 @@ class VideoCaptureThread(QThread):
                             if (now_emit - self._last_nonempty_status_time) <= self.status_hold_sec:
                                 status_to_emit = self._last_nonempty_status
                             try:
-                                self.detection_status.emit(status_to_emit)
+                                self.detection_status.emit(dict(status_to_emit, **self.gesture.control_status()))
                             except Exception:
                                 pass
                             self._last_status_emit_time = now_emit
@@ -501,7 +490,7 @@ class VideoCaptureThread(QThread):
                         # Use mirrored preview so the user does not perceive left/right reversal.
                         display_frame = cv2.flip(processed_frame, 1) if self.mirror_preview else processed_frame
 
-                        remain_cmd = self.cmd_hud(command)
+                        remain_cmd = self.cmd_hud()
                         hud_text = f" {remain_cmd}"
                         font = cv2.FONT_HERSHEY_SIMPLEX
                         font_scale = 0.8

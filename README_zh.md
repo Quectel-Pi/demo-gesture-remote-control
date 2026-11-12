@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-本项目是一个基于 [Quectel Pi H1 单板电脑](https://developer.quectel.com/doc/sbc/)实现的手势识别远程视频控制示例。
+本项目是一个基于 [Quectel Pi 智能主控板](https://www.quectel.com.cn/quectel-pi/documentation-center)实现的手势识别远程视频控制示例。
 系统通过摄像头采集手部图像，结合 AI 手势识别算法，实现隔空控制视频播放、进度与音量的自然交互体验。
 
 ![界面预览](docs/assets/main_recognize.png)
@@ -52,6 +52,7 @@
    - NumPy == 1.24.3
    - PySide6 == 6.5.3
    - protobuf == 3.20.3
+   - av == 16.0.1
 
 ### 实现步骤
 
@@ -84,23 +85,30 @@ python3 --version
 ## 项目结构
 
 ```
-gesture-remote-control/
-├── docs                        # 项目文档
-│   ├── assets                  # 静态资源文件
-│   └── oceans.mp4              # 示例播放视频
+demo-gesture-remote-control/
+├── docs/                       # 项目文档
+│   ├── assets/
+│   │   ├── main.png
+│   │   └── main_recognize.png
+│   └── oceans.mp4              # 示例播放视频
 ├── src/                        # 源代码目录
-|   ├── main.py                 # 主程序入口
-│   ├── gesture_recognizer.py   # 眼部检测核心逻辑
-│   ├── video_capture.py        # 视频采集线程
-│   ├── video_player.py         # 视频播放器线程
-│   ├── fullscreen_player_mode.py  # 全屏播放模式界面
-│   ├── log.py                  # 日志记录模块
-├── log_files/                  # 日志文件
-├── README.md                   # 项目中文说明文档
-├── README_en.md                # 项目英文说明文档
-├── install.sh                          # 部署环境脚本
-├── setup_autostart.sh          # 开机自启动脚本
-└── requirements.txt            # 依赖包列表
+│   ├── models/                 # RKNN 手部检测与关键点模型
+│   │   ├── LICENSE
+│   │   ├── hand_landmark_full.rknn
+│   │   └── palm_detection_full.rknn
+│   ├── fullscreen_player_mode.py
+│   ├── gesture_recognizer.py
+│   ├── log.py
+│   ├── main.py
+│   ├── npu_hands.py
+│   ├── video_capture.py
+│   └── video_player.py
+├── .gitignore
+├── README.md                   # 英文说明文档
+├── README_zh.md                # 中文说明文档
+├── install.sh                  # 部署环境脚本
+├── requirements.txt            # 依赖包列表
+└── setup_autostart.sh          # 开机自启动脚本
 ```
 
 ## 运行程序
@@ -112,6 +120,20 @@ cd demo-gesture-remote-control/src/
 python3 main.py
 ```
 ![](docs/assets/main.png)
+
+
+## 模型说明
+
+Quectel Pi M2智能主控板可使用 OpenCV Zoo 提供的 MediaPipe 手部模型，已转换为适用于 RK3576 的 FP16 RKNN 格式：
+
+- **手掌检测模型**：定位画面中的手掌，为关键点模型提供手部区域。
+- **手部关键点模型**：输出每只手的 21 个关键点，供原有手势逻辑判断动作。
+
+模型采用 Apache 2.0 许可，来源为 [手掌检测](https://github.com/opencv/opencv_zoo/tree/main/models/palm_detection_mediapipe) 和 [手部关键点](https://github.com/opencv/opencv_zoo/tree/main/models/handpose_estimation_mediapipe)，许可文件位于 `src/models/LICENSE`。
+
+安装和使用方式不变：执行 `./install.sh` 部署，按上文运行 `python3 main.py`。
+M2 自动尝试使用 NPU，不可用时提示原因并回退 CPU；H1、M1 继续使用 MediaPipe CPU。
+手势操作保持不变，无需额外配置或手动转换模型。
 
 ## 报告问题
 如在使用过程中遇到问题，欢迎在[移远官方论坛](https://forumschinese.quectel.com/c/quectel-pi/58) 提交技术咨询，我们的技术支持团队将及时为您解答。

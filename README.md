@@ -2,7 +2,7 @@
 
 [中文](README_zh.md) | English
 
-This project is a gesture-recognition–based remote video control demo implemented on the [Quectel Pi H1 single-board computer](https://developer.quectel.com/doc/sbc/en/index.html).
+This project is a gesture-recognition–based remote video control demo implemented on the [Quectel Pi Smart Single-Board Computer](https://www.quectel.com.cn/quectel-pi/documentation-center).
 The system captures hand images through a camera and applies AI-based hand gesture recognition algorithms to enable touchless control of video playback, progress, and volume, providing a natural and intuitive user interaction experience.
 
 ![](docs/assets/main_recognize.png)
@@ -52,6 +52,7 @@ The system captures hand images through a camera and applies AI-based hand gestu
    - NumPy == 1.24.3
    - PySide6 == 6.5.3
    - protobuf == 3.20.3
+   - av == 16.0.1
 
 ### Implementation Steps
 
@@ -84,23 +85,30 @@ python3 --version
 ## Project Structure
 
 ```
-gesture-remote-control/
-├── docs                        # Project documentation
-│   ├── assets                  # Static asset files
-│   └── oceans.mp4              # Sample demo video
+demo-gesture-remote-control/
+├── docs/                       # Project documentation
+│   ├── assets/
+│   │   ├── main.png
+│   │   └── main_recognize.png
+│   └── oceans.mp4              # Sample demo video
 ├── src/                        # Source code directory
-|   ├── main.py                 # Main program entry point
-│   ├── gesture_recognizer.py   # Gesture recognition core logic
-│   ├── video_capture.py        # Video capture thread
-│   ├── video_player.py         # Video player thread
-│   ├── fullscreen_player_mode.py # Fullscreen playback UI
-│   ├── log.py                  # Logging module
-├── log_files/                  # Log files
-├── README.md                   # Project english documentation
-├── README_zh.md                # Project chinese documentation
+│   ├── models/                 # RKNN hand detection and landmark models
+│   │   ├── LICENSE
+│   │   ├── hand_landmark_full.rknn
+│   │   └── palm_detection_full.rknn
+│   ├── fullscreen_player_mode.py
+│   ├── gesture_recognizer.py
+│   ├── log.py
+│   ├── main.py
+│   ├── npu_hands.py
+│   ├── video_capture.py
+│   └── video_player.py
+├── .gitignore
+├── README.md                   # English documentation
+├── README_zh.md                # Chinese documentation
 ├── install.sh                  # Environment deployment script
-├── setup_autostart.sh          # Auto-start setup script
-└── requirements.txt            # Dependency list
+├── requirements.txt            # Dependency list
+└── setup_autostart.sh          # Auto-start setup script
 ```
 
 ## Run the program
@@ -112,6 +120,19 @@ cd demo-gesture-remote-control/src/
 python3 main.py
 ```
 ![](docs/assets/main.png)
+
+## Model Overview
+
+The Quectel Pi M2 development board can use MediaPipe hand models from OpenCV Zoo, converted to FP16 RKNN format for RK3576:
+
+- **Palm detection model**: Locates palms in the image and provides hand regions for the landmark model.
+- **Hand landmark model**: Outputs 21 landmarks per hand for the existing gesture recognition logic.
+
+The models are licensed under Apache 2.0 and sourced from [palm detection](https://github.com/opencv/opencv_zoo/tree/main/models/palm_detection_mediapipe) and [hand landmark estimation](https://github.com/opencv/opencv_zoo/tree/main/models/handpose_estimation_mediapipe). The license is included in `src/models/LICENSE`.
+
+Installation and usage remain unchanged: deploy with `./install.sh` and run `python3 main.py` as described above.
+M2 automatically attempts NPU inference and reports the reason before falling back to CPU if unavailable; H1 and M1 continue to use MediaPipe on CPU.
+Gesture controls remain unchanged, with no additional configuration or manual model conversion required.
 
 ## Reporting Issues
 If you encounter any issues during use, please submit technical inquiries on the [Quectel Official Forum](https://forumschinese.quectel.com/c/quectel-pi/58). Our technical support team will respond promptly.

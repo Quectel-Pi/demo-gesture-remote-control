@@ -309,6 +309,7 @@ class MainWindow(QMainWindow):
         self.video_display = QLabel("Click to select a video file")
         self.video_display.setAlignment(Qt.AlignCenter)
         self.video_display.setScaledContents(True)
+        self.video_display.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         # Use relative dimensions instead of fixed sizes
         self.video_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.26))
         self.video_display.setStyleSheet("""
@@ -950,6 +951,22 @@ class MainWindow(QMainWindow):
 
     def update_detection_status(self, detection_result):
         """Update detection status (hand & gesture)"""
+        if detection_result and 'cooling' in detection_result:
+            hand_present = detection_result.get('hand_present', False)
+            self._set_badge(
+                self.detect_status,
+                self.tr("Gesture Active", "手势激活") if hand_present else self.tr("No Hand", "未检测到手"),
+                "#a6e3a1" if hand_present else "#f38ba8",
+            )
+            command = detection_result.get('display_cmd')
+            if detection_result['cooling']:
+                mode_text, mode_color = self.control_mode_text(command)
+                self._set_badge(self.gesture_mode_status, mode_text, mode_color)
+                self._set_badge(self.gesture_action_status, self.command_display_text(command), "#a6e3a1")
+            else:
+                self._set_badge(self.gesture_mode_status, self.tr("Waiting", "等待中"), "#f9e2af")
+                self._set_badge(self.gesture_action_status, self.tr("Waiting", "等待中"), "#f9e2af")
+            return
         now_ms = int(time.time() * 1000)
         if not detection_result:
             if self.last_control_command and now_ms < self.last_gesture_display_until_ms:
