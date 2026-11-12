@@ -30,6 +30,9 @@ The system captures hand images through a camera and applies AI-based hand gestu
 |Swipe left|Rewind 5 seconds|
 |Swipe up|Volume +5%|
 |Swipe down|Volume −5%|
+|Thumbs up, hold still for about 0.06 seconds (after completing both exercises)|Toggle the favorite star in the top toolbar|
+
+This `gotc-experience` branch is a hands-on exercise version. Complete `TODO Exercise 1` in `src/gesture_recognizer.py` and `TODO Exercise 2` in `src/main.py` before using thumbs up to toggle the star. Until then, the thumbs-up action is not enabled, but the star can still be clicked manually. The favorite button is a visual effect only: it does not change audio or playback, requires no video, and is not saved between runs. Release the pose before repeating; the existing 1-second gesture cooldown still applies.
 
 ## Hardware Requirements
 

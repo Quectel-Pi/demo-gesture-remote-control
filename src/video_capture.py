@@ -289,6 +289,7 @@ class VideoCaptureThread(QThread):
             'seek_back': 'Seek -5s',
             'vol_up': 'Volume +5%',
             'vol_down': 'Volume -5%',
+            'favorite': 'Favorite',
         }
         return labels.get(cmd, 'Waiting')
 
