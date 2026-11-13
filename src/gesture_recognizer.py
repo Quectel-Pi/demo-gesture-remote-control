@@ -103,6 +103,9 @@ class MediaPipeGestureRecognizer:
         self.fist_armed = True
         self.fist_latched = False
         self.fist_release_frames = 3
+        self.pose_hold_ms = 20
+        self.pose_release_frames = 3
+        self._pose_states = {}
 
         # 轨迹 & 主手选择
         self.tracks = {}
@@ -151,6 +154,53 @@ class MediaPipeGestureRecognizer:
     @staticmethod
     def _hand_width(pts):
         return abs(pts[17][0] - pts[5][0]) + 1e-6
+
+    def _pose_hits(self, pts):
+        if pts is None:
+            return {"favorite": False}
+        palm = np.subtract(pts[9], pts[0])
+        axis = palm / (np.linalg.norm(palm) + 1e-9)
+        width = max(1.0, float(np.linalg.norm(np.subtract(pts[17], pts[5]))))
+        fingers = [
+            np.dot(np.subtract(pts[tip], pts[tip - 2]), axis) > max(2.0, width * 0.12)
+            for tip in (8, 12, 16, 20)
+        ]
+        thumb = np.subtract(pts[4], pts[2])
+        thumb_length = np.linalg.norm(thumb)
+        aligned = np.dot(thumb, axis) / (thumb_length + 1e-9)
+        thumb_base = np.subtract(pts[3], pts[2])
+        thumb_tip = np.subtract(pts[4], pts[3])
+        straightness = np.dot(thumb_base, thumb_tip) / (
+            np.linalg.norm(thumb_base) * np.linalg.norm(thumb_tip) + 1e-9
+        )
+        fingertip_gap = min(np.linalg.norm(np.subtract(pts[4], pts[tip])) for tip in (8, 12, 16, 20)) / width
+        index_gap = np.linalg.norm(np.subtract(pts[4], pts[6])) / width
+        return {
+            # TODO Exercise 1: Detect thumbs-up.
+            "favorite": False,
+        }
+
+    def _pose_command(self, hits, is_static):
+        now = time.monotonic()
+        command = None
+        for name, hit in hits.items():
+            state = self._pose_states.setdefault(name, {"start": None, "released": 0, "latched": False})
+            if not hit:
+                state["start"] = None
+                state["released"] = min(self.pose_release_frames, state["released"] + 1)
+                if state["released"] >= self.pose_release_frames:
+                    state["latched"] = False
+            else:
+                state["released"] = 0
+                if not is_static or state["latched"]:
+                    state["start"] = None
+                elif state["start"] is None:
+                    state["start"] = now
+                elif (now - state["start"]) * 1000 >= self.pose_hold_ms:
+                    state["latched"] = True
+                    state["start"] = None
+                    command = name
+        return command
 
     def _palm_spread(self, pts, cx, cy):
         tips = [8, 12, 16, 20]
@@ -380,8 +430,23 @@ class MediaPipeGestureRecognizer:
             dy_med = finger_dy
 
         spread = self._palm_spread(pts, cx, cy)
+        hits = self._pose_hits(pts)
+        static_limit = min(flow_static_px, max(3.0, self._hand_width(pts) * 0.08))
+        pose_static = abs(dx_med) < static_limit and abs(dy_med) < static_limit
+        pose_command = self._pose_command(hits, pose_static)
+        if pose_command:
+            return "thumbs_up", pose_command
+        if any(hits.values()) and pose_static:
+            # 静止手型等待触发时，不让抖动或上一动作的速度残留触发其他指令。
+            self._reset_swipe_motion()
+            self.dx_ema = self.dy_ema = 0.0
+            self.dy_hist_norm.clear()
+            self.dy_hist_t.clear()
+            self._dx_gate_high = self._dy_gate_high = False
+            self._open_palm_start_ms = self._fist_start_ms = 0
+            return None, None
         open_palm_pose = (four >= 4) and (self.open_palm_min_spread_ratio <= spread <= self.open_palm_max_spread_ratio)
-        fist_pose = (four == 0)
+        fist_pose = (four == 0) and not hits["favorite"]
         pose_swipe_blocked = (four >= 4) or fist_pose
 
         if pose_swipe_blocked:
@@ -498,7 +563,7 @@ class MediaPipeGestureRecognizer:
 
         # Fist (pause)
         fist_cooling = (now_ms - self._last_motion_cmd_ms) < self.fist_cooldown_ms
-        fist_candidate = (not fist_cooling) and is_static and (four == 0) and (spread <= self.fist_max_spread_ratio)
+        fist_candidate = (not fist_cooling) and is_static and fist_pose and (spread <= self.fist_max_spread_ratio)
 
         if not fist_candidate:
             self._fist_start_ms = 0
@@ -581,12 +646,14 @@ class MediaPipeGestureRecognizer:
             if tid is not None:
                 if tid != self.prev_swipe_track_id:
                     self._reset_swipe_motion()
+                    self._pose_command(self._pose_hits(pts), False)
                     self.prev_swipe_track_id = tid
                 self.open_palm_armed = self.tracks.get(tid, {}).get("armed", True)
 
             # 如果是新主手，清空光流历史与下滑积分
             # 通过检测 primary_lock_ms 实现短期锁定（在 _select_primary 中设置）
             if time.monotonic() < self._action_cooldown_until:
+                self._pose_command(self._pose_hits(pts), False)
                 # 冷却期间不积累回手轨迹，结束后从新动作开始识别。
                 self._reset_swipe_motion()
                 self.prev_gray = None
@@ -609,6 +676,7 @@ class MediaPipeGestureRecognizer:
                 self.tracks[tid]["armed"] = self.open_palm_armed
         else:
             # 没有主手时重置状态，回到画面后可快速触发
+            self._pose_command(self._pose_hits(None), False)
             self.open_palm_armed = True
             self.open_palm_latched = False
             self._open_palm_start_ms = 0

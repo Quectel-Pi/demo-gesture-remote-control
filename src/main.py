@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QCheckBox, QFrame,
     QSplitter, QGridLayout, QSlider, QSizePolicy,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import Qt, QTimer, QPointF, QSize
+from PySide6.QtGui import QImage, QPixmap, QPainter, QPolygonF, QColor, QIcon
 
 from gesture_recognizer import MediaPipeGestureRecognizer
 from video_capture import VideoCaptureThread
@@ -377,12 +377,43 @@ class MainWindow(QMainWindow):
         screen_show_group = QGroupBox()
         screen_show_layout = QGridLayout()
         screen_show_layout.setContentsMargins(6, 4, 6, 4)
-        screen_show_layout.setColumnStretch(0, 1)
         screen_show_layout.setColumnStretch(1, 1)
         screen_show_layout.setColumnStretch(2, 1)
-        screen_show_layout.addWidget(self.language_btn, 0, 0)
-        screen_show_layout.addWidget(self.fullscreen_play_btn, 0, 1)
-        screen_show_layout.addWidget(self.fullscreen_btn, 0, 2)
+        screen_show_layout.setColumnStretch(3, 1)
+        screen_show_layout.addWidget(self.language_btn, 0, 1)
+        screen_show_layout.addWidget(self.fullscreen_play_btn, 0, 2)
+        screen_show_layout.addWidget(self.fullscreen_btn, 0, 3)
+        self.favorite_btn = QPushButton()
+        self.favorite_btn.setCheckable(True)
+        self.favorite_btn.setFixedSize(36, 30)
+        self.favorite_btn.setAccessibleName("Favorite")
+        self.favorite_btn.setIconSize(QSize(24, 24))
+        star_icon = QIcon()
+        star = QPolygonF([QPointF(x, y) for x, y in (
+            (12, 1), (15.4, 8), (23, 9.2), (17.5, 14.5), (18.8, 22),
+            (12, 18.5), (5.2, 22), (6.5, 14.5), (1, 9.2), (8.6, 8),
+        )])
+        for state, color in ((QIcon.Off, "#a6adc8"), (QIcon.On, "#e5a000")):
+            pixmap = QPixmap(24, 24)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(color))
+            painter.drawPolygon(star)
+            painter.end()
+            star_icon.addPixmap(pixmap, QIcon.Normal, state)
+        self.favorite_btn.setIcon(star_icon)
+        self.favorite_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #45475a; color: #a6adc8;
+                font-size: 24px; border: 1px solid #585b70; border-radius: 5px;
+            }
+            QPushButton:checked {
+                background-color: #f9e2af; color: #b77900; border-color: #f9e2af;
+            }
+        """)
+        screen_show_layout.addWidget(self.favorite_btn, 0, 0)
         screen_show_group.setLayout(screen_show_layout)
         right_layout.addWidget(screen_show_group)
         # file_info_layout = QVBoxLayout()
@@ -561,6 +592,7 @@ class MainWindow(QMainWindow):
             self.fullscreen_btn.setText("Fullscreen" if is_en else "全屏")
 
         self.fullscreen_play_btn.setText("Fullscreen Play Mode" if is_en else "全屏播放模式")
+        self.favorite_btn.setToolTip(self.tr("Favorite (visual effect only)", "收藏（仅界面效果）"))
         self.video_play_btn.setText("Play" if is_en else "播放")
         self.video_pause_btn.setText("Pause" if is_en else "暂停")
         self.video_stop_btn.setText("Stop" if is_en else "停止")
@@ -604,6 +636,7 @@ class MainWindow(QMainWindow):
             "• Swipe left (1-3 fingers) → Rewind 5 seconds<br>"
             "• Swipe up (1-3 fingers) → Volume +5%<br>"
             "• Swipe down (1-3 fingers) → Volume -5%<br>"
+            "• Thumbs up (hold 0.06s) → Toggle favorite star<br>"
             "<b>Note:</b><br>"
             "• Keep your hand within the camera view<br>"
             "• Perform gestures clearly and steadily<br>"
@@ -616,6 +649,7 @@ class MainWindow(QMainWindow):
             "• 向左滑动（1-3 根手指）→ 快退 5 秒<br>"
             "• 向上滑动（1-3 根手指）→ 音量 +5%<br>"
             "• 向下滑动（1-3 根手指）→ 音量 -5%<br>"
+            "• 竖起大拇指（保持 0.06 秒）→ 切换收藏星标<br>"
             "<b>注意：</b><br>"
             "• 请将手保持在摄像头视野范围内<br>"
             "• 手势动作请清晰稳定<br>"
@@ -644,12 +678,15 @@ class MainWindow(QMainWindow):
             "seek_back": self.tr("Rewind 5s", "快退 5 秒"),
             "vol_up": self.tr("Volume +5%", "音量 +5%"),
             "vol_down": self.tr("Volume -5%", "音量 -5%"),
+            "favorite": self.tr("Favorite", "收藏"),
         }
         return labels.get(command, self.tr("Waiting", "等待中"))
 
     def control_mode_text(self, command):
         if command in ("vol_up", "vol_down"):
             return self.tr("Volume Control", "音量控制"), "#cba6f7"
+        if command == "favorite":
+            return self.tr("Favorite", "收藏"), "#f9e2af"
         if command in ("seek_forward", "seek_back"):
             return self.tr("Seek Control", "快进快退控制"), "#74c7ec"
         if command in ("play", "pause", "toggle"):
@@ -851,15 +888,33 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 error(f"seek error (prep): {e}")
             return
+        if command == "favorite":
+            # TODO Exercise 2: Toggle the favorite star.
+            return
         # 音量（系统 PulseAudio）
         if command in ("vol_up", "vol_down"):
+            import subprocess
             try:
                 step = "+5%" if command == "vol_up" else "-5%"
-                import subprocess
+                if command == "vol_up":
+                    mute_state = subprocess.run(
+                        ['pactl', 'get-sink-mute', '@DEFAULT_SINK@'],
+                        check=True, capture_output=True, text=True,
+                        env=dict(os.environ, LC_ALL="C"),
+                    ).stdout.strip()
+                    if mute_state not in ("Mute: yes", "Mute: no"):
+                        raise ValueError(f"Unexpected pactl mute state: {mute_state!r}")
+                    if mute_state == "Mute: yes":
+                        step = "5%"
                 subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', step],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception as e:
+                                check=True, capture_output=True, text=True)
+                if command == "vol_up":
+                    subprocess.run(['pactl', 'set-sink-mute', '@DEFAULT_SINK@', '0'],
+                                   check=True, capture_output=True, text=True)
+            except (OSError, subprocess.CalledProcessError, ValueError) as e:
                 error(f"volume error: {e}")
+                QMessageBox.warning(self, self.tr("Audio Error", "音频错误"),
+                                    self.tr("Failed to adjust volume", "调整音量失败"))
             return
 
     def play_video(self):
